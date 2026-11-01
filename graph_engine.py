@@ -188,6 +188,23 @@ def query_graph_rag(
     4. Generates grounded answer via OpenRouter API.
     """
     start_time = time.time()
+
+    if not os.path.exists(db_path):
+        return {
+            "seeds_df": pd.DataFrame(),
+            "selected_seed_ids": [],
+            "subgraph_df": pd.DataFrame(),
+            "flattened_context": "",
+            "transform_stats": {},
+            "llm_answer": (
+                f"ℹ️ **Knowledge Graph database not found at `{db_path}`.**\n\n"
+                "Please build or initialize a database using the **'👉 Try it on your own files'** section below."
+            ),
+            "execution_time": 0.0,
+            "error": "Database not found on disk",
+            "prompt_sent": "",
+        }
+
     db, conn = get_kuzu_connection(db_path, read_only=True)
 
     try:

@@ -110,6 +110,20 @@ def query_semantic_rag(
     4. Generates response using OpenRouter API.
     """
     start_time = time.time()
+
+    if not os.path.exists(db_path):
+        return {
+            "top_k": [],
+            "context": "",
+            "llm_answer": (
+                f"ℹ️ **Vector database not found at `{db_path}`.**\n\n"
+                "Please build or initialize a database using the **'👉 Try it on your own files'** section below."
+            ),
+            "execution_time": 0.0,
+            "error": "Database not found on disk",
+            "prompt_sent": "",
+        }
+
     db, conn = get_kuzu_connection(db_path, read_only=True)
 
     try:

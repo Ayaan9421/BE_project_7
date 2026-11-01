@@ -226,13 +226,21 @@ with st.sidebar:
 
     # 1. OpenRouter API Key
     st.markdown("##### 🔑 OpenRouter API")
-    openrouter_env_key = os.environ.get("OPENROUTER_API_KEY", "")
+    openrouter_env_key = ""
+    try:
+        if "OPENROUTER_API_KEY" in st.secrets:
+            openrouter_env_key = str(st.secrets["OPENROUTER_API_KEY"]).strip()
+    except Exception:
+        pass
+    if not openrouter_env_key:
+        openrouter_env_key = os.environ.get("OPENROUTER_API_KEY", "")
+
     user_api_key = st.text_input(
         "OpenRouter API Key",
         value=openrouter_env_key,
         type="password",
         placeholder="sk-or-v1-...",
-        help="Reads from OPENROUTER_API_KEY in .env by default.",
+        help="Reads from Streamlit Secrets or OPENROUTER_API_KEY in .env by default.",
     )
     if user_api_key:
         os.environ["OPENROUTER_API_KEY"] = user_api_key
