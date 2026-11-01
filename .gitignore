@@ -1,0 +1,57 @@
+# Environment & Secrets (Never commit API keys)
+.env
+.env.local
+*.env
+!.env.example
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / Cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# KùzuDB Databases & Lock Files (Exceeds 100MB GitHub limit)
+*.kuzu
+*.kuzu.wal
+*.kuzu.lock
+*.wal
+*.lock
+*_rag.kuzu/
+*_kg.kuzu/
+test_tmp*
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Streamlit runtime & secrets
+.streamlit/secrets.toml
+
+# Distribution & Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log

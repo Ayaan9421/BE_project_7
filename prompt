@@ -1,0 +1,137 @@
+# TASK: Build a Dual-Pipeline Semantic RAG & Graph RAG Streamlit Application
+
+You are tasked with building a full-stack Streamlit dashboard in Python that implements, compares, and evaluates Semantic RAG vs. Graph RAG pipelines using **KùzuDB**, **SentenceTransformers**, and **LangChain HuggingFace Endpoints**.
+
+---
+
+## 1. TECHNICAL ARCHITECTURE & STACK
+* **Frontend Framework:** `streamlit`
+* **Graph & Vector Database:** `kuzu` (Used for both vector storage and property graph storage)
+* **Embedding Model:** `sentence-transformers/all-MiniLM-L6-v2` (Embedding Dimension: 384)
+* **LLM Model:** `openai/gpt-oss-120b` (or `openai/gpt-oss-20b`) via `langchain_huggingface.HuggingFaceEndpoint` / `ChatHuggingFace`
+* **Data Processing:** `numpy`, `pandas`, `json`, `pathlib`, `re`
+
+---
+
+## 2. CORE LAYOUT & UI REQUIREMENTS
+
+### A. Top Layout
+* **App Title & Subtitle:** Display a clean title ("Dual RAG Engine: Semantic vs. Knowledge Graph") with a brief description.
+* **Global Query Box:** High-visibility text input (`st.text_input` or `st.chat_input`) at the top where users enter their question.
+
+### B. Dual Tab Structure
+Create two main tabs:
+1. `Semantic RAG`
+2. `Graph RAG`
+
+---
+
+## 3. TAB SPECIFICATIONS
+
+### TAB 1: Semantic RAG Tab
+When the user submits a query:
+1. **Retrieved Chunks Inspection:**
+   * Display a clean structured table or expandable cards showing top-$k$ retrieved chunks.
+   * For each chunk, show:
+     - **First few characters** (Preview text snippet)
+     - **Semantic score / Cosine Similarity score**
+     - **Source File & Page Number** (Metadata)
+2. **Generated Answer:**
+   * Display the LLM-generated response grounded strictly in the semantic chunk context.
+
+### TAB 2: Graph RAG Tab
+When the user submits a query:
+1. **Seed Nodes Inspection:**
+   * Display fetched seed nodes from HNSW vector index search over `Entity` nodes.
+   * Show `Entity Name`, `Entity ID`, and `Distance/Score`.
+   * Explicitly highlight the **Selected Seed Nodes** used for traversal.
+2. **Retrieved Subgraph Inspection:**
+   * Show raw multi-hop traversed triples `(Head) -[Relation]-> (Tail)` along with `Source File` and `Page Number`.
+3. **Graph Flattening / Context Transformation:**
+   * Show how the retrieved subgraph is formatted into structured string context (grouped by source file, sorted, and deduplicated) before feeding to the LLM.
+4. **Generated Answer:**
+   * Display the LLM answer grounded strictly in the flattened knowledge graph triples.
+
+---
+
+## 4. BOTTOM ACTION & DYNAMIC DB INGESTION ENGINE
+
+At the bottom of **BOTH** tabs (or in a persistent bottom section), place a button/expander labeled:
+👉 **`Try it on your own files`**
+
+### Workflow on Pressing "Try it on your own files":
+1. **File Uploader Component:** `st.file_uploader(accept_multiple_files=True)` allowing `.pdf`, `.txt`, or `.json` dataset uploads.
+2. **Database Naming Input:** Ask the user for a custom database prefix name (e.g., `user_project`).
+3. **Database Creation Rules:**
+   * Process and chunk uploaded documents.
+   * Compute embeddings using `SentenceTransformer('all-MiniLM-L6-v2')`.
+   * Create two distinct KùzuDB database instances on disk:
+     1. `<database_name>_rag.kuzu`: Vector Database storing `Chunk` nodes (`chunk_id`, `text`, `source_file`, `page_number`, `embedding[384]`).
+     2. `<database_name>_kg.kuzu`: Knowledge Graph Database storing `Entity` nodes (`entity_id`, `name`, `embedding[384]`) and `Graph` relationships (`head`, `relation`, `tail`, `source_file`, `page_number`).
+4. Display progress bars and success toasts upon completing database initialization.
+
+---
+
+## 5. CODE IMPLMENTATION DETAILS & BACKEND LOGIC
+
+Ensure your implementation aligns with the following reference backend logic:
+
+```python
+# --- Semantic RAG Logic ---
+def query_semantic_rag(question, conn, embed_model, llm, k=5):
+    query_vector = embed_model.encode(question).tolist()
+    result = conn.execute("MATCH (c:Chunk) RETURN c.chunk_id, c.text, c.source_file, c.page_number, c.embedding")
+    
+    rows = []
+    while result.has_next():
+        row = result.get_next()
+        rows.append((row[0], row[1], row[2], row[3], np.array(row[4])))
+    
+    q_vec = np.array(query_vector)
+    scored = []
+    for cid, text, src, page, emb in rows:
+        sim = float(np.dot(q_vec, emb) / (np.linalg.norm(q_vec) * np.linalg.norm(emb) + 1e-9))
+        scored.append({"chunk_id": cid, "text": text, "source": src, "page": page, "score": sim})
+    
+    top_k = sorted(scored, key=lambda x: x["score"], reverse=True)[:k]
+    context = "\n\n".join([item["text"] for item in top_k])
+    
+    # Run LLM Chain with template...
+    return top_k, context, llm_answer
+
+# --- Graph RAG Logic ---
+def query_graph_rag(question, conn, embed_model, llm, top_k=5, hops=2):
+    q_vec = embed_model.encode(question, normalize_embeddings=True).tolist()
+    
+    # 1. Fetch Seed Nodes via Vector Index
+    seeds_res = conn.execute("""
+        CALL QUERY_VECTOR_INDEX('Entity', 'entity_hnsw', $q_vec,$top_k)
+        YIELD node, distance
+        RETURN node.entity_id, node.name, distance
+        ORDER BY distance ASC
+    """, {"q_vec": q_vec, "top_k": top_k})
+    
+    seeds_df = seeds_res.get_as_df()
+    seed_ids = seeds_df['node.entity_id'].tolist()
+    
+    # 2. Get Subgraph
+    id_list = "[" + ", ".join(f'"{eid}"' for eid in seed_ids) + "]"
+    subgraph_res = conn.execute(f"""
+        MATCH (h:Entity)-[r:Graph*1..{hops}]->(t:Entity)
+        WHERE h.entity_id IN {id_list}
+        UNWIND relationships(r) AS rel
+        RETURN DISTINCT h.name AS head, rel.relation AS relation, t.name AS tail, rel.source_file AS source, rel.page_number AS page
+    """)
+    subgraph_df = subgraph_res.get_as_df()
+    
+    # 3. Flatten Graph to Context
+    flattened_context = subgraph_to_context(subgraph_df)
+    
+    # 4. Generate Answer via LLM...
+    return seeds_df, subgraph_df, flattened_context, llm_answer
+
+Refer to the colab notebooks @BE_RAG.ipynb and @GraphRAG.ipynb and create a virtual env for this and work in it.
+
+streamlit run app.py --server.headless true --server.port 8501
+
+agy --conversation=7a62c18f-6215-4868-919e-325dbb7e115f
