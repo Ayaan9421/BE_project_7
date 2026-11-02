@@ -168,16 +168,30 @@ st.markdown(
 # Helper: Database Discovery
 # -----------------------------------------------------------------------------
 def discover_databases():
-    """Find all matching _rag.kuzu and _kg.kuzu files/directories."""
-    rag_dbs = glob.glob("*_rag.kuzu")
-    kg_dbs = glob.glob("*_kg.kuzu")
+    """Find all matching RAG and Knowledge Graph .kuzu databases."""
+    all_kuzu = glob.glob("*.kuzu")
+    rag_dbs = set()
+    kg_dbs = set()
 
-    if os.path.exists(DEFAULT_RAG_DB) and DEFAULT_RAG_DB not in rag_dbs:
-        rag_dbs.append(DEFAULT_RAG_DB)
-    if os.path.exists(DEFAULT_KG_DB) and DEFAULT_KG_DB not in kg_dbs:
-        kg_dbs.append(DEFAULT_KG_DB)
+    for f in all_kuzu:
+        if os.path.islink(f):
+            continue
+        f_name = os.path.basename(f)
+        f_lower = f_name.lower()
+        if "rag" in f_lower:
+            rag_dbs.add(f_name)
+        if ("graph" in f_lower or "_kg" in f_lower or "knowlegde" in f_lower) and "rag" not in f_lower:
+            kg_dbs.add(f_name)
 
-    return sorted(list(set(rag_dbs))), sorted(list(set(kg_dbs)))
+    def_rag = os.path.basename(DEFAULT_RAG_DB)
+    def_kg = os.path.basename(DEFAULT_KG_DB)
+
+    if os.path.exists(DEFAULT_RAG_DB):
+        rag_dbs.add(def_rag)
+    if os.path.exists(DEFAULT_KG_DB):
+        kg_dbs.add(def_kg)
+
+    return sorted(list(rag_dbs)), sorted(list(kg_dbs))
 
 
 # -----------------------------------------------------------------------------
@@ -267,24 +281,24 @@ with st.sidebar:
 
     default_rag_idx = 0
     for i, r in enumerate(rag_options):
-        if "cleaned_dataset" in r or r == DEFAULT_RAG_DB:
+        if "RAG_Knowledge_Base" in r or r == DEFAULT_RAG_DB or r == os.path.basename(DEFAULT_RAG_DB):
             default_rag_idx = i
             break
 
     selected_rag_db = st.selectbox(
-        "Vector DB (*_rag.kuzu)",
+        "Vector DB (*.kuzu)",
         options=rag_options if rag_options else [DEFAULT_RAG_DB],
         index=default_rag_idx if rag_options else 0,
     )
 
     default_kg_idx = 0
     for i, k in enumerate(kg_options):
-        if "complete_dataset" in k or k == DEFAULT_KG_DB:
+        if k == "Knowlegde_Graph.kuzu" or k == os.path.basename(DEFAULT_KG_DB) or k == DEFAULT_KG_DB:
             default_kg_idx = i
             break
 
     selected_kg_db = st.selectbox(
-        "Knowledge Graph DB (*_kg.kuzu)",
+        "Knowledge Graph DB (*.kuzu)",
         options=kg_options if kg_options else [DEFAULT_KG_DB],
         index=default_kg_idx if kg_options else 0,
     )

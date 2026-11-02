@@ -8,8 +8,8 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 
 # Default Database Paths
-DEFAULT_RAG_DB = str(BASE_DIR / "cleaned_dataset_rag.kuzu")
-DEFAULT_KG_DB = str(BASE_DIR / "complete_dataset_final_kg.kuzu")
+DEFAULT_RAG_DB = str(BASE_DIR / "RAG_Knowledge_Base.kuzu")
+DEFAULT_KG_DB = str(BASE_DIR / "Knowlegde_Graph.kuzu")
 
 # Embedding Configuration
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
