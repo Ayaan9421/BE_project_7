@@ -309,19 +309,187 @@ st.caption(
 )
 
 # -----------------------------------------------------------------------------
-# Clean Global Query Box (Single Simple Text Input)
+# Predefined Questions (100 curated questions across 9 categories)
 # -----------------------------------------------------------------------------
+PREDEFINED_QUESTIONS = {
+    "A. Multi-hop reasoning within one subject": [
+        "How do functional dependencies lead to normalization, and how does the resulting schema affect index design?",
+        "Explain the chain from ER/EER modeling to relational schema mapping to normal form violations.",
+        "How does a transaction's isolation level affect which concurrency control protocol is appropriate, and how does that in turn affect recovery logging?",
+        "Trace how a deadlock is detected, and what recovery mechanism is triggered once it's broken.",
+        "How do B+-tree indexes support query optimization decisions during query processing?",
+        "How does buffer management strategy affect both file organization choice and recovery/logging overhead?",
+        "What is the relationship between multivalued dependencies, 4NF, and join dependencies leading to 5NF?",
+        "How does the choice of hashing (static vs dynamic) affect both file organization and index maintenance during insert operations?",
+        "How do database security mechanisms (access control) interact with concurrency control on shared resources?",
+        "Explain how relational algebra operators map to SQL query constructs and then to query execution plans.",
+    ],
+    "B. Cross-topic bridges within a subject": [
+        "How does distributed database fragmentation and replication affect transaction concurrency control protocols?",
+        "How do NoSQL data models relate to the CAP theorem trade-offs discussed alongside distributed databases?",
+        "How does the MapReduce programming model, as covered in the DBMS big-data chapter, connect to Hadoop's HDFS architecture?",
+        "How do active database triggers interact with transaction rollback and recovery?",
+        "How does object-relational mapping (ORDBMS) relate to XML data representation in the same book?",
+        "How is spatial/temporal database indexing different from the standard B-tree indexing described earlier in the same text?",
+        "How does database security link to distributed database authentication mechanisms?",
+        "How does information retrieval (IR) evaluation (precision/recall) relate to indexing techniques used for Web search discussed in the same book?",
+        "How does query optimization's cost model depend on statistics collected during database tuning?",
+        "How does the data mining chapter's association rule mining connect to the data warehousing chapter's OLAP operations in the same text?",
+    ],
+    "C. Cross-book comparisons": [
+        "Compare how DBMS and ADBMS define 'transaction atomicity' versus how BDA treats fault tolerance in distributed computation (MapReduce node failure).",
+        "Compare B-tree/B+-tree indexing (DBMS) with the indexing techniques used for near-duplicate detection (BDA's shingling + LSH).",
+        "Compare how DWM defines a 'data cube' with how ADBMS defines OLAP support in advanced database models.",
+        "Compare clustering algorithms in DWM (k-means, hierarchical, CURE) with clustering of social-network graphs in BDA.",
+        "Compare 'association rule mining' as presented in DWM with 'frequent itemsets'/Apriori as presented in BDA.",
+        "Compare distributed database replication (ADBMS) with data replication for fault tolerance in MapReduce/HDFS (BDA).",
+        "Compare normalization theory (DBMS) with dimensional modeling / star schema design (DWM) — why do warehouses often denormalize?",
+        "Compare recommendation systems in BDA with the classification/prediction methods in DWM.",
+        "Compare hashing for file organization (DBMS) with hash functions used in stream processing algorithms (BDA, e.g., DGIM, Bloom filters).",
+        "Compare security/access control in ADBMS with privacy issues raised around large-scale data mining in BDA/DWM.",
+        "Compare PageRank's graph-based ranking (BDA) with database indexing's goal of fast retrieval (DBMS) — what problem does each solve?",
+        "Compare NoSQL 'four categories' (ADBMS) with the 'big data v's' framing typically used to justify NoSQL adoption (BDA/DWM).",
+        "Compare OLAP star/snowflake schemas (DWM) with object-relational/XML models (ADBMS) as alternative advanced data models.",
+        "Compare outlier/anomaly detection (DWM) with spam/fraud detection use-cases discussed in BDA (e.g., link/click fraud).",
+        "Compare dimensionality reduction (SVD/LSI in BDA) with attribute subset selection / PCA as a data reduction technique in DWM.",
+    ],
+    "D. Aggregation / list everything related to X": [
+        "List every algorithm across all four books that relies on hashing, and state what each uses it for.",
+        "List every technique across the corpus used to reduce dataset size or dimensionality (data reduction).",
+        "What are all the distributed/parallel processing concepts mentioned across ADBMS and BDA (e.g., fragmentation, MapReduce, replication)?",
+        "List every clustering algorithm mentioned across BDA and DWM.",
+        "List every concurrency-control or synchronization mechanism mentioned across DBMS and ADBMS.",
+        "What are all the index structures discussed across DBMS, ADBMS, and BDA (B-tree, hash index, bitmap index, LSH, grid file)?",
+        "List every evaluation metric mentioned across the books for measuring mining/retrieval quality (precision, recall, confidence, support, RMSE).",
+        "What are all the graph-related algorithms mentioned across BDA (PageRank, social network clustering, matching)?",
+        "List every normalization or schema-design concept from DBMS alongside every schema concept from DWM (star, snowflake, fact constellation).",
+        "What are all the types of 'big data' storage/processing systems named across ADBMS and BDA (NoSQL categories, Hadoop, HDFS, Hive, Pig)?",
+        "List every data structure introduced specifically for streaming or approximate computation across BDA.",
+        "What are all the security-related topics spread across ADBMS (access control, encryption, distributed security)?",
+        "List every kind of 'advanced data model' mentioned across ADBMS and DWM (temporal, spatial, multimedia, deductive, active).",
+        "What machine-learning algorithms appear across BDA and DWM (perceptron, SVM, gradient descent, decision trees, k-NN)?",
+        "List every optimization or cost-based technique mentioned across DBMS's query optimization chapter and BDA's algorithmic efficiency discussions.",
+    ],
+    "E. Dependency-chain / 'why' questions": [
+        "Why does choosing an isolation level affect which recovery technique a DBMS must use?",
+        "Why does the CAP theorem push NoSQL systems away from strict ACID guarantees used in traditional DBMS?",
+        "Why does MapReduce's design assume node failures, and how does that shape its execution model?",
+        "Why does data warehousing favor a denormalized star schema over the 3NF designs taught for OLTP systems?",
+        "Why is the Apriori algorithm's 'monotonicity of itemsets' property essential for its pruning strategy?",
+        "Why do LSH techniques trade off exactness for scalability compared to exact index lookups in a DBMS?",
+        "Why does PageRank need 'teleporting' to handle dead ends and spider traps?",
+        "Why does 2PL (two-phase locking) guarantee serializability, and what failure mode does it not prevent?",
+        "Why does distributed database replication improve availability but complicate consistency?",
+        "Why is dimensionality reduction (SVD) useful before applying clustering or recommendation algorithms?",
+        "Why does bitmap indexing work well for OLAP queries but poorly for high-cardinality OLTP columns?",
+        "Why does the decaying window model matter for mining data streams rather than static batch mining?",
+        "Why does query optimization rely on selectivity estimates, and how do outdated statistics break this?",
+        "Why is a multivalued dependency insufficient to prevent redundancy without 4NF, motivating join dependencies and 5NF?",
+        "Why does the Balance Algorithm outperform greedy in the online bipartite matching / AdWords problem?",
+    ],
+    "F. Compare and contrast": [
+        "Contrast transaction processing (DBMS) with batch analytical processing (DWM/BDA) in terms of latency, consistency, and use case.",
+        "Contrast structured query languages (SQL) with the algorithmic/procedural style of MapReduce jobs.",
+        "Contrast schema-on-write (traditional DBMS) with schema-on-read (NoSQL/big data systems).",
+        "Contrast supervised classification (DWM) with unsupervised clustering (BDA) using the same 'labeling' concept from both books.",
+        "Contrast centralized recovery/logging (DBMS) with fault-tolerant recomputation in distributed frameworks (BDA/ADBMS).",
+        "Contrast relational algebra operators with graph traversal operations implicit in social network analysis (BDA).",
+        "Contrast OLTP system design goals with OLAP/data warehouse design goals as presented across DBMS and DWM.",
+        "Contrast market-basket association rules (BDA) with sequential pattern / multilevel association mining (DWM).",
+        "Contrast a data mart vs. an enterprise data warehouse (DWM) with a fragmented vs. replicated distributed database (ADBMS).",
+        "Contrast the accuracy-vs-speed trade-off in approximate stream algorithms (BDA) with exact ACID guarantees in classical DBMS.",
+    ],
+    "G. Synthesis / design a system": [
+        "Design a system architecture that combines a transactional DBMS with a data warehouse for analytics — what components from each book would you use?",
+        "How would you design indexing for a hybrid workload combining OLTP queries and OLAP-style aggregations?",
+        "Propose a pipeline to detect near-duplicate documents at scale, citing techniques from both DBMS-style indexing and BDA's shingling/LSH.",
+        "Design a recommendation engine architecture that uses distributed storage concepts from ADBMS and the recommendation algorithms from BDA.",
+        "How would you architect a system to maintain consistency across replicated nodes while also supporting fast big-data analytics jobs?",
+        "Propose a strategy for securing a distributed, big-data warehouse combining access control (ADBMS) and privacy-preserving data mining (DWM).",
+        "Design a concurrency control scheme suitable for a system also running long analytical MapReduce jobs concurrently with OLTP transactions.",
+        "How would clustering (DWM/BDA) be used to optimize physical database design/index selection (DBMS/ADBMS)?",
+        "Propose an ETL pipeline connecting an operational DBMS to a data warehouse's star schema, citing normalization and denormalization trade-offs.",
+        "Design a fault-tolerant data pipeline that uses HDFS replication (BDA) alongside a NoSQL system's own replication strategy (ADBMS) — what redundancy is avoided or duplicated?",
+    ],
+    "H. Enumerated relationship / entity-linking": [
+        "Which chapters or concepts across these four books are prerequisites for understanding data warehousing's OLAP implementation?",
+        "Which specific algorithms in BDA depend on hash functions first introduced conceptually in DBMS?",
+        "Which concepts in ADBMS's distributed database chapter are direct extensions of the single-node concurrency control chapter in DBMS?",
+        "Which data mining techniques in DWM require the data cube structures defined earlier in the same book, and which are independent?",
+        "Which big-data storage systems in ADBMS map onto categories of NoSQL, and which of BDA's algorithms are commonly run on top of them?",
+        "What entities/topics does 'indexing' connect to across all four books (B-tree, bitmap, hash, inverted index, LSH)?",
+        "What entities/topics does 'similarity' connect to across BDA and DWM (Jaccard similarity, cosine similarity, distance measures, clustering)?",
+        "What entities/topics does 'consistency' connect to across DBMS, ADBMS, and BDA (ACID, CAP, eventual consistency, replication protocols)?",
+        "What entities/topics does 'aggregation' connect to across DWM and BDA (data cube aggregation, MapReduce grouping/aggregation)?",
+        "What entities/topics does 'graph' connect to across BDA (PageRank, social networks, matching) versus DBMS's ER diagrams and EER graphs?",
+    ],
+    "I. Negative/absence questions": [
+        "Does the transaction recovery protocol in DBMS have any direct dependency on the PageRank algorithm in BDA?",
+        "Is there a described relationship between XML data modeling (ADBMS) and frequent pattern mining (DWM), or are they independent topics?",
+        "Does data warehousing's bitmap indexing depend on the locality-sensitive hashing techniques from BDA, or are they unrelated indexing methods?",
+        "Are the concurrency control protocols in DBMS reused unmodified in the distributed database chapter, or do they require fundamental changes?",
+        "Does the Apriori algorithm (BDA/DWM) have any structural dependency on B+-tree indexing (DBMS), or do they solve unrelated problems?",
+    ],
+}
+
+# Build a flat list for the selectbox: "— Type your own question —" + grouped questions
+CUSTOM_QUESTION_OPTION = "— Type your own question —"
+
+def _build_question_options():
+    """Build a flat list of questions with category headers for the selectbox."""
+    options = [CUSTOM_QUESTION_OPTION]
+    for category, questions in PREDEFINED_QUESTIONS.items():
+        for q in questions:
+            options.append(q)
+    return options
+
+QUESTION_OPTIONS = _build_question_options()
+
+# Build category lookup for formatting
+_question_to_category = {}
+for _cat, _qs in PREDEFINED_QUESTIONS.items():
+    for _q in _qs:
+        _question_to_category[_q] = _cat
+
+# -----------------------------------------------------------------------------
+# Clean Global Query Box (Dropdown + Custom Text Input)
+# -----------------------------------------------------------------------------
+st.markdown("##### 📋 Select a question or type your own")
+
+selected_question = st.selectbox(
+    "Choose a predefined question",
+    options=QUESTION_OPTIONS,
+    index=0,
+    format_func=lambda x: x if x == CUSTOM_QUESTION_OPTION else f"[{_question_to_category.get(x, '').split('.')[0].strip()}] {x[:120]}{'...' if len(x) > 120 else ''}",
+    label_visibility="collapsed",
+    help="Pick from 100 curated questions across 9 categories, or select the first option to type your own.",
+)
+
 with st.form("query_form", clear_on_submit=False):
-    col_input, col_btn = st.columns([5, 1])
-    with col_input:
-        query_input = st.text_input(
-            "Query Box",
-            value="How do functional dependencies lead to normalization, and how does the resulting schema affect index design?",
-            placeholder="Ask a question about database normalization, schemas, indexes...",
-            label_visibility="collapsed",
+    if selected_question == CUSTOM_QUESTION_OPTION:
+        col_input, col_btn = st.columns([5, 1])
+        with col_input:
+            query_input = st.text_input(
+                "Query Box",
+                value="",
+                placeholder="Type your own question here...",
+                label_visibility="collapsed",
+            )
+        with col_btn:
+            execute_button = st.form_submit_button("Search", type="primary", use_container_width=True)
+    else:
+        query_input = selected_question
+        st.markdown(
+            f'<div style="background: rgba(30,41,59,0.45); border: 1px solid rgba(148,163,184,0.18); '
+            f'border-radius: 8px; padding: 10px 14px; font-size: 0.95rem; color: #e2e8f0; margin-bottom: 8px;">'
+            f'<span style="color: #94a3b8; font-size: 0.78rem;">{_question_to_category.get(selected_question, "")}</span><br/>'
+            f'{selected_question}</div>',
+            unsafe_allow_html=True,
         )
-    with col_btn:
         execute_button = st.form_submit_button("Search", type="primary", use_container_width=True)
+
+# -----------------------------------------------------------------------------
+
 
 # -----------------------------------------------------------------------------
 # Query Execution Logic
