@@ -1,0 +1,636 @@
+"""
+Script to build a temporary knowledge graph dataset and Kuzu database
+based on the 100 curated questions across the 4 textbooks (DBMS, ADBMS, DWM, BDA).
+Follows the format described in ingestion.py.
+"""
+import io
+import json
+import os
+import sys
+
+# All 100 question knowledge graph triples and text passages
+TRIPLES_DATA = [
+    # =========================================================================
+    # CATEGORY A: Multi-hop reasoning within one subject (10 questions)
+    # =========================================================================
+    # Q1: Functional dependencies -> normalization -> index design
+    {"head": "functional dependency", "relation": "defines constraint where attribute uniquely determines", "tail": "dependent attribute", "source_file": "dbms.pdf", "page_number": 487},
+    {"head": "functional dependency", "relation": "violations motivate", "tail": "schema normalization", "source_file": "dbms.pdf", "page_number": 488},
+    {"head": "schema normalization", "relation": "decomposes relations to eliminate", "tail": "data redundancy and update anomalies", "source_file": "dbms.pdf", "page_number": 490},
+    {"head": "schema normalization", "relation": "produces schema with multiple tables requiring", "tail": "foreign key joins", "source_file": "dbms.pdf", "page_number": 512},
+    {"head": "foreign key joins", "relation": "require indexing strategy using", "tail": "b+-tree indexes on foreign keys", "source_file": "dbms.pdf", "page_number": 560},
+    {"head": "b+-tree indexes on foreign keys", "relation": "optimize join query processing and prevent", "tail": "full table scans", "source_file": "dbms.pdf", "page_number": 562},
+    {"head": "index design", "relation": "is directly affected by normalization through", "tail": "secondary b-tree indexes on join attributes", "source_file": "dbms.pdf", "page_number": 565},
+    {"head": "schema normalization", "relation": "affects", "tail": "index design", "source_file": "dbms.pdf", "page_number": 566},
+
+    # Q2: ER/EER modeling -> relational schema mapping -> normal form violations
+    {"head": "eer modeling", "relation": "represents conceptual schemas using", "tail": "entities, relationships, and specializations", "source_file": "dbms.pdf", "page_number": 105},
+    {"head": "eer diagram to relational mapping", "relation": "transforms entity types into", "tail": "relational schema tables", "source_file": "dbms.pdf", "page_number": 280},
+    {"head": "relational schema mapping", "relation": "if combining multiple independent concepts creates", "tail": "partial and transitive functional dependencies", "source_file": "dbms.pdf", "page_number": 475},
+    {"head": "partial dependency on composite primary key", "relation": "causes violation of", "tail": "second normal form 2nf", "source_file": "dbms.pdf", "page_number": 480},
+    {"head": "transitive dependency on non-key attributes", "relation": "causes violation of", "tail": "third normal form 3nf", "source_file": "dbms.pdf", "page_number": 482},
+    {"head": "normal form violations", "relation": "are resolved by decomposing relations into", "tail": "bcnf and 3nf schemas", "source_file": "dbms.pdf", "page_number": 495},
+
+    # Q3: Transaction isolation level -> concurrency control -> recovery logging
+    {"head": "transaction isolation level", "relation": "defines concurrency anomalies permitted from", "tail": "read uncommitted to serializable", "source_file": "dbms.pdf", "page_number": 745},
+    {"head": "serializable isolation level", "relation": "requires strict concurrency control like", "tail": "strict two-phase locking strict 2pl", "source_file": "dbms.pdf", "page_number": 750},
+    {"head": "strict two-phase locking strict 2pl", "relation": "holds exclusive write locks until commit preventing", "tail": "dirty reads and cascading aborts", "source_file": "dbms.pdf", "page_number": 752},
+    {"head": "prevention of cascading aborts", "relation": "simplifies recovery logging to", "tail": "write-ahead logging wal with steal no-force policy", "source_file": "dbms.pdf", "page_number": 780},
+    {"head": "write-ahead logging wal", "relation": "records log sequence numbers lsn to support", "tail": "aries recovery algorithm", "source_file": "dbms.pdf", "page_number": 785},
+    {"head": "concurrency control protocol", "relation": "determines recovery overhead in", "tail": "recovery logging", "source_file": "dbms.pdf", "page_number": 790},
+
+    # Q4: Deadlock detection -> recovery mechanism
+    {"head": "deadlock detection", "relation": "periodically inspects transactions for circular wait using", "tail": "wait-for graph wfg", "source_file": "dbms.pdf", "page_number": 760},
+    {"head": "wait-for graph wfg", "relation": "presence of directed cycle indicates", "tail": "deadlock condition", "source_file": "dbms.pdf", "page_number": 762},
+    {"head": "deadlock condition", "relation": "triggers recovery mechanism by selecting a", "tail": "deadlock victim transaction", "source_file": "dbms.pdf", "page_number": 764},
+    {"head": "deadlock victim transaction", "relation": "is chosen based on lowest", "tail": "cost of abort and rollback", "source_file": "dbms.pdf", "page_number": 765},
+    {"head": "deadlock recovery mechanism", "relation": "aborts victim transaction and executes", "tail": "transaction rollback via undo log records", "source_file": "dbms.pdf", "page_number": 766},
+    {"head": "transaction rollback", "relation": "releases all locks held by victim resolving", "tail": "deadlock state", "source_file": "dbms.pdf", "page_number": 768},
+
+    # Q5: B+-tree indexes -> query optimization decisions
+    {"head": "b+-tree index", "relation": "stores sorted search keys with linked leaf nodes providing", "tail": "equality and range access paths", "source_file": "dbms.pdf", "page_number": 620},
+    {"head": "b+-tree index", "relation": "provides query optimizer with metadata on", "tail": "tree height, leaf blocks, and clustering status", "source_file": "dbms.pdf", "page_number": 685},
+    {"head": "query optimizer", "relation": "uses b+-tree access path to calculate", "tail": "estimated disk io cost", "source_file": "dbms.pdf", "page_number": 690},
+    {"head": "clustered b+-tree index", "relation": "is selected by optimizer for range queries because", "tail": "consecutive tuples reside in contiguous disk blocks", "source_file": "dbms.pdf", "page_number": 692},
+    {"head": "b+-tree index sorted order", "relation": "enables optimizer to execute sort-merge join without", "tail": "external sorting pass", "source_file": "dbms.pdf", "page_number": 710},
+
+    # Q6: Buffer management strategy -> file organization -> recovery/logging overhead
+    {"head": "buffer management strategy", "relation": "controls in-memory page replacement using", "tail": "steal and no-force policies", "source_file": "dbms.pdf", "page_number": 605},
+    {"head": "steal policy", "relation": "allows uncommitted modified frames to overwrite disk pages in", "tail": "heap and indexed file organizations", "source_file": "dbms.pdf", "page_number": 608},
+    {"head": "no-force policy", "relation": "avoids writing committed pages immediately to disk reducing", "tail": "random disk write operations", "source_file": "dbms.pdf", "page_number": 610},
+    {"head": "steal policy", "relation": "necessitates undo log records in", "tail": "write-ahead logging wal", "source_file": "dbms.pdf", "page_number": 775},
+    {"head": "no-force policy", "relation": "necessitates redo log records in", "tail": "write-ahead logging wal", "source_file": "dbms.pdf", "page_number": 776},
+    {"head": "buffer management strategy", "relation": "dictates checkpointing frequency and recovery time in", "tail": "aries crash recovery", "source_file": "dbms.pdf", "page_number": 788},
+
+    # Q7: Multivalued dependencies, 4NF, join dependencies, 5NF
+    {"head": "multivalued dependency mvd", "relation": "occurs when attribute x determines set of values y independently of", "tail": "remaining attribute set z", "source_file": "dbms.pdf", "page_number": 515},
+    {"head": "multivalued dependency mvd", "relation": "causes tuple redundancy in relations that are already in", "tail": "boyce-codd normal form bcnf", "source_file": "dbms.pdf", "page_number": 518},
+    {"head": "fourth normal form 4nf", "relation": "eliminates non-trivial multivalued dependencies by", "tail": "decomposing into two separate relations", "source_file": "dbms.pdf", "page_number": 520},
+    {"head": "join dependency jd", "relation": "generalizes mvd to lossless decomposition across", "tail": "three or more component relations", "source_file": "dbms.pdf", "page_number": 525},
+    {"head": "fifth normal form 5nf", "relation": "also known as project-join normal form pj/nf eliminates", "tail": "join dependencies not implied by candidate keys", "source_file": "dbms.pdf", "page_number": 528},
+    {"head": "relationship between mvd 4nf jd and 5nf", "relation": "is that 4nf is a special case of 5nf where", "tail": "join dependency involves exactly two relations", "source_file": "dbms.pdf", "page_number": 530},
+
+    # Q8: Static vs dynamic hashing -> file organization & index maintenance
+    {"head": "static hashing", "relation": "allocates fixed number of bucket addresses via", "tail": "fixed hash function h(k)", "source_file": "dbms.pdf", "page_number": 635},
+    {"head": "static hashing", "relation": "during frequent inserts suffers from full buckets creating", "tail": "overflow bucket chains", "source_file": "dbms.pdf", "page_number": 638},
+    {"head": "dynamic hashing", "relation": "such as extendible hashing and linear hashing dynamically adjusts", "tail": "bucket space as records are inserted", "source_file": "dbms.pdf", "page_number": 642},
+    {"head": "extendible hashing", "relation": "uses directory with global depth to split overflowing buckets using", "tail": "local depth doubling", "source_file": "dbms.pdf", "page_number": 645},
+    {"head": "linear hashing", "relation": "splits buckets in systematic linear order avoiding", "tail": "centralized directory bottleneck", "source_file": "dbms.pdf", "page_number": 650},
+    {"head": "choice of dynamic hashing", "relation": "minimizes index reorganization and overflow maintenance during", "tail": "high-volume insert operations", "source_file": "dbms.pdf", "page_number": 655},
+
+    # Q9: Database security (access control) -> concurrency control
+    {"head": "database access control", "relation": "enforces security policies like discretionary dac and mandatory mac on", "tail": "database resources and tables", "source_file": "dbms.pdf", "page_number": 820},
+    {"head": "access control checks", "relation": "must precede lock acquisition in", "tail": "concurrency control subsystem", "source_file": "dbms.pdf", "page_number": 825},
+    {"head": "concurrency control locks", "relation": "on shared resources can introduce security risk of", "tail": "covert timing channels in mac", "source_file": "adbms.pdf", "page_number": 610},
+    {"head": "covert timing channel", "relation": "allows high security transaction to signal low security transaction via", "tail": "shared lock contention delays", "source_file": "adbms.pdf", "page_number": 615},
+    {"head": "multilevel secure concurrency control", "relation": "uses multiversion concurrency control mvcc or polyinstantiation to", "tail": "prevent lock-based covert channels", "source_file": "adbms.pdf", "page_number": 620},
+
+    # Q10: Relational algebra -> SQL query constructs -> query execution plans
+    {"head": "sql select-from-where construct", "relation": "maps directly to relational algebra operators", "tail": "selection sigma, projection pi, and join bow-tie", "source_file": "dbms.pdf", "page_number": 215},
+    {"head": "relational algebra expression tree", "relation": "is transformed by heuristic optimization into", "tail": "optimized logical query tree", "source_file": "dbms.pdf", "page_number": 670},
+    {"head": "heuristic optimization rules", "relation": "push selections and projections down before", "tail": "expensive join operations", "source_file": "dbms.pdf", "page_number": 675},
+    {"head": "cost-based query optimizer", "relation": "assigns physical operator algorithms to logical operators creating", "tail": "query execution plan qep", "source_file": "dbms.pdf", "page_number": 680},
+    {"head": "query execution plan qep", "relation": "is executed as pipeline of iterators returning", "tail": "final query result tuples", "source_file": "dbms.pdf", "page_number": 682},
+
+    # =========================================================================
+    # CATEGORY B: Cross-topic bridges within a subject (10 questions)
+    # =========================================================================
+    # Q11: Distributed database fragmentation/replication -> concurrency control
+    {"head": "distributed database fragmentation", "relation": "splits tables horizontally or vertically across", "tail": "multiple network sites", "source_file": "adbms.pdf", "page_number": 75},
+    {"head": "distributed database replication", "relation": "stores duplicate copies of fragments at multiple sites requiring", "tail": "distributed replica synchronization", "source_file": "adbms.pdf", "page_number": 85},
+    {"head": "distributed concurrency control", "relation": "uses distributed 2pl or majority voting to coordinate", "tail": "locks across replicated fragment sites", "source_file": "adbms.pdf", "page_number": 120},
+    {"head": "distributed two-phase commit 2pc", "relation": "guarantees atomic commit across all participating", "tail": "fragmented and replicated nodes", "source_file": "adbms.pdf", "page_number": 140},
+
+    # Q12: NoSQL data models -> CAP theorem trade-offs
+    {"head": "nosql data models", "relation": "encompass key-value, document, wide-column, and graph architectures for", "tail": "horizontal scale-out across partitioned clusters", "source_file": "adbms.pdf", "page_number": 410},
+    {"head": "cap theorem", "relation": "proves distributed systems must choose between", "tail": "consistency c and availability a under partition p", "source_file": "adbms.pdf", "page_number": 420},
+    {"head": "network partition tolerance p", "relation": "is mandatory in large clusters forcing nosql systems to adopt", "tail": "ap or cp design trade-offs", "source_file": "adbms.pdf", "page_number": 425},
+    {"head": "nosql ap systems", "relation": "such as cassandra and dynamo prioritize availability by offering", "tail": "eventual consistency and base model", "source_file": "adbms.pdf", "page_number": 430},
+    {"head": "nosql cp systems", "relation": "such as hbase and mongodb prioritize strong consistency by", "tail": "rejecting writes during network partitions", "source_file": "adbms.pdf", "page_number": 435},
+
+    # Q13: MapReduce programming model in DBMS -> Hadoop HDFS architecture
+    {"head": "mapreduce programming model", "relation": "processes big data in parallel using user-defined", "tail": "map function and reduce function", "source_file": "dbms.pdf", "page_number": 950},
+    {"head": "hadoop hdfs architecture", "relation": "stores large files as 128mb blocks distributed across", "tail": "datanodes coordinated by master namenode", "source_file": "dbms.pdf", "page_number": 955},
+    {"head": "mapreduce execution", "relation": "schedules map tasks on datanodes storing input blocks to achieve", "tail": "data locality", "source_file": "dbms.pdf", "page_number": 960},
+    {"head": "mapreduce shuffle and sort", "relation": "transfers intermediate map output key-values over network to", "tail": "reduce tasks writing output back to hdfs", "source_file": "dbms.pdf", "page_number": 965},
+
+    # Q14: Active database triggers -> transaction rollback and recovery
+    {"head": "active database triggers", "relation": "execute event-condition-action eca rules upon", "tail": "insert, update, or delete database events", "source_file": "dbms.pdf", "page_number": 860},
+    {"head": "immediate trigger coupling mode", "relation": "executes triggered actions within the same transaction context as", "tail": "the triggering database operation", "source_file": "dbms.pdf", "page_number": 865},
+    {"head": "trigger execution failure", "relation": "aborts the transaction and initiates", "tail": "cascading transaction rollback", "source_file": "dbms.pdf", "page_number": 870},
+    {"head": "transaction rollback with triggers", "relation": "uses write-ahead log wal to undo both", "tail": "trigger actions and original user statements", "source_file": "dbms.pdf", "page_number": 875},
+
+    # Q15: Object-relational mapping (ORDBMS) -> XML data representation
+    {"head": "ordbms data model", "relation": "extends relations with user-defined types udt, arrays, and", "tail": "nested table collections", "source_file": "dbms.pdf", "page_number": 440},
+    {"head": "xml data representation", "relation": "models semi-structured data as hierarchical tree of", "tail": "elements, attributes, and text nodes", "source_file": "dbms.pdf", "page_number": 450},
+    {"head": "ordbms nested types and arrays", "relation": "provide direct relational mapping for storing", "tail": "hierarchical xml document trees", "source_file": "dbms.pdf", "page_number": 455},
+    {"head": "sql/xml standards", "relation": "support xml publishing and querying using functions like", "tail": "xmlelement, xmlforest, and xquery", "source_file": "dbms.pdf", "page_number": 460},
+
+    # Q16: Spatial/temporal database indexing vs standard B-tree indexing
+    {"head": "standard b-tree indexing", "relation": "indexes scalar data along a single dimension using", "tail": "one-dimensional total key ordering", "source_file": "dbms.pdf", "page_number": 615},
+    {"head": "spatial data model", "relation": "represents multi-dimensional geographic objects like", "tail": "points, lines, polygons, and regions", "source_file": "adbms.pdf", "page_number": 510},
+    {"head": "spatial database indexing", "relation": "indexes multi-dimensional bounding boxes using", "tail": "r-trees, r+-trees, and grid files", "source_file": "adbms.pdf", "page_number": 520},
+    {"head": "temporal database indexing", "relation": "indexes valid-time and transaction-time intervals using", "tail": "time-index and interval r-trees", "source_file": "adbms.pdf", "page_number": 535},
+    {"head": "difference in spatial/temporal indexing", "relation": "is that b-trees cannot preserve spatial proximity across multiple dimensions without", "tail": "space-filling z-order or hilbert curves", "source_file": "adbms.pdf", "page_number": 540},
+
+    # Q17: Database security -> distributed database authentication
+    {"head": "database security", "relation": "relies on user authentication before evaluating", "tail": "authorization and access permissions", "source_file": "adbms.pdf", "page_number": 580},
+    {"head": "distributed database authentication", "relation": "authenticates users across autonomous remote network nodes using", "tail": "kerberos ticket-granting service and pki", "source_file": "adbms.pdf", "page_number": 590},
+    {"head": "kerberos in distributed databases", "relation": "provides mutual authentication and session key exchange without", "tail": "transmitting passwords across unsecure networks", "source_file": "adbms.pdf", "page_number": 595},
+    {"head": "distributed authorization matrix", "relation": "maps authenticated global user credentials to", "tail": "local database privileges across distributed sites", "source_file": "adbms.pdf", "page_number": 600},
+
+    # Q18: IR evaluation (precision/recall) -> Web search indexing
+    {"head": "information retrieval evaluation", "relation": "measures search result quality using", "tail": "precision, recall, and f1-score", "source_file": "dbms.pdf", "page_number": 970},
+    {"head": "precision in search retrieval", "relation": "is fraction of retrieved documents that are relevant while recall is", "tail": "fraction of total relevant documents retrieved", "source_file": "dbms.pdf", "page_number": 972},
+    {"head": "web search indexing", "relation": "indexes terms across web documents using", "tail": "inverted index with postings lists", "source_file": "dbms.pdf", "page_number": 975},
+    {"head": "inverted index postings lists", "relation": "store term frequencies and positions to calculate", "tail": "tf-idf and bm25 relevance rankings", "source_file": "dbms.pdf", "page_number": 980},
+    {"head": "ranking algorithms like tf-idf", "relation": "directly optimize search precision at top-k results in", "tail": "web search engines", "source_file": "dbms.pdf", "page_number": 985},
+
+    # Q19: Query optimization cost model -> database tuning statistics
+    {"head": "query optimization cost model", "relation": "calculates estimated query execution cost in terms of", "tail": "disk block page io and cpu operations", "source_file": "dbms.pdf", "page_number": 695},
+    {"head": "database tuning statistics", "relation": "are gathered by analyze utilities and stored in", "tail": "system catalog metadata tables", "source_file": "dbms.pdf", "page_number": 700},
+    {"head": "catalog statistics for optimizer", "relation": "include number of rows, block counts, and", "tail": "attribute value frequency histograms", "source_file": "dbms.pdf", "page_number": 702},
+    {"head": "selectivity estimation", "relation": "uses catalog statistics and histograms to calculate", "tail": "intermediate result sizes for candidate plans", "source_file": "dbms.pdf", "page_number": 705},
+    {"head": "outdated catalog statistics", "relation": "cause inaccurate cost estimation leading optimizer to choose", "tail": "suboptimal query execution plans", "source_file": "dbms.pdf", "page_number": 708},
+
+    # Q20: Association rule mining -> OLAP operations in data warehousing
+    {"head": "olap operations in data warehousing", "relation": "navigate multidimensional data cubes using", "tail": "roll-up, drill-down, slice, dice, and pivot", "source_file": "dwm.pdf", "page_number": 140},
+    {"head": "association rule mining", "relation": "discovers correlated item combinations across transactions using", "tail": "support and confidence thresholds", "source_file": "dwm.pdf", "page_number": 230},
+    {"head": "data cube precomputed aggregations", "relation": "provide multi-granularity transaction views facilitating", "tail": "multilevel association rule mining", "source_file": "dwm.pdf", "page_number": 245},
+    {"head": "olap slice and dice operations", "relation": "isolate target customer segments on which", "tail": "focused association rules are mined", "source_file": "dwm.pdf", "page_number": 250},
+
+    # =========================================================================
+    # CATEGORY C: Cross-book comparisons (15 questions)
+    # =========================================================================
+    # Q21: Transaction atomicity (DBMS/ADBMS) vs fault tolerance in BDA MapReduce
+    {"head": "transaction atomicity in dbms and adbms", "relation": "ensures all-or-nothing execution of transactions using", "tail": "write-ahead logging wal, undo logs, and 2pc", "source_file": "dbms.pdf", "page_number": 740},
+    {"head": "fault tolerance in bda mapreduce", "relation": "recovers from worker node failure through", "tail": "idempotent deterministic task recomputation", "source_file": "bda.pdf", "page_number": 25},
+    {"head": "comparison of atomicity vs bda fault tolerance", "relation": "is that dbms restores consistent state via undo/redo logs while bda re-executes", "tail": "failed tasks from immutable input data blocks", "source_file": "bda.pdf", "page_number": 28},
+
+    # Q22: B-tree/B+-tree indexing (DBMS) vs near-duplicate detection (BDA shingling+LSH)
+    {"head": "b+-tree indexing in dbms", "relation": "solves exact key lookup and range search on 1d keys using", "tail": "balanced search tree with linked leaves", "source_file": "dbms.pdf", "page_number": 618},
+    {"head": "near-duplicate detection in bda", "relation": "finds similar text documents at web scale using", "tail": "k-shingling, minhash, and locality-sensitive hashing lsh", "source_file": "bda.pdf", "page_number": 75},
+    {"head": "minhash algorithm in bda", "relation": "compresses large shingle sets into short signatures preserving", "tail": "jaccard similarity", "source_file": "bda.pdf", "page_number": 80},
+    {"head": "locality-sensitive hashing lsh in bda", "relation": "hashes minhash signatures into bands to achieve", "tail": "sub-linear approximate nearest neighbor search", "source_file": "bda.pdf", "page_number": 85},
+    {"head": "b-tree vs lsh indexing comparison", "relation": "is that b-tree provides exact deterministic scalar search while lsh provides", "tail": "probabilistic approximate high-dimensional similarity search", "source_file": "bda.pdf", "page_number": 90},
+
+    # Q23: Data cube in DWM vs OLAP support in ADBMS
+    {"head": "data cube in dwm", "relation": "precomputes multidimensional aggregations across dimension lattices in", "tail": "dedicated molap or rolap warehouse storage", "source_file": "dwm.pdf", "page_number": 115},
+    {"head": "olap support in adbms", "relation": "implements multidimensional analytics within relational/object database via", "tail": "extended sql grouping sets, rollup, and cube", "source_file": "adbms.pdf", "page_number": 480},
+    {"head": "comparison of dwm cube vs adbms olap", "relation": "is that dwm builds dedicated precomputed multi-level cubes while adbms uses", "tail": "on-the-fly query aggregations and materialized views", "source_file": "dwm.pdf", "page_number": 120},
+
+    # Q24: Clustering in DWM (k-means, hierarchical, CURE) vs BDA social network graphs
+    {"head": "clustering in dwm", "relation": "partitions multi-dimensional attribute space using geometric distance with", "tail": "k-means, hierarchical clustering, and cure", "source_file": "dwm.pdf", "page_number": 385},
+    {"head": "cure clustering algorithm in dwm", "relation": "uses representative points and shrinkage to discover", "tail": "non-spherical arbitrary shaped clusters", "source_file": "dwm.pdf", "page_number": 395},
+    {"head": "social network clustering in bda", "relation": "partitions graph nodes based on edge betweenness and modularity using", "tail": "girvan-newman algorithm and spectral clustering", "source_file": "bda.pdf", "page_number": 340},
+    {"head": "dwm clustering vs bda graph clustering", "relation": "is that dwm clusters points in continuous euclidean space while bda clusters", "tail": "discrete graph topology based on edge density", "source_file": "bda.pdf", "page_number": 345},
+
+    # Q25: Association rule mining (DWM) vs frequent itemsets/Apriori (BDA)
+    {"head": "association rule mining in dwm", "relation": "discovers actionable business rules a implies b evaluating", "tail": "support, confidence, and correlation lift", "source_file": "dwm.pdf", "page_number": 235},
+    {"head": "frequent itemset mining in bda", "relation": "scales itemset counting over massive web datasets using", "tail": "apriori, pcy algorithm, and son algorithm", "source_file": "bda.pdf", "page_number": 195},
+    {"head": "son algorithm in bda", "relation": "distributes transactions across mapreduce workers to find", "tail": "frequent itemsets in two parallel passes", "source_file": "bda.pdf", "page_number": 210},
+    {"head": "dwm vs bda association mining", "relation": "is that dwm focuses on rule interpretation and multi-level hierarchies while bda focuses on", "tail": "memory efficiency and distributed mapreduce scaling", "source_file": "bda.pdf", "page_number": 215},
+
+    # Q26: Distributed database replication (ADBMS) vs MapReduce/HDFS replication (BDA)
+    {"head": "distributed replication in adbms", "relation": "copies tables to multiple sites to improve read latency and availability using", "tail": "synchronous eager replication or asynchronous lazy replication", "source_file": "adbms.pdf", "page_number": 88},
+    {"head": "adbms replication consistency", "relation": "requires distributed locks or 2pc to maintain", "tail": "strict transactional consistency across copies", "source_file": "adbms.pdf", "page_number": 92},
+    {"head": "hdfs data replication in bda", "relation": "splits files into blocks and stores 3 copies across separate racks for", "tail": "hardware fault tolerance in commodity clusters", "source_file": "bda.pdf", "page_number": 32},
+    {"head": "comparison of adbms vs hdfs replication", "relation": "is that adbms manages transactional updates on tables while hdfs provides", "tail": "append-only block-level file redundancy without update locking", "source_file": "bda.pdf", "page_number": 35},
+
+    # Q27: Normalization theory (DBMS) vs dimensional modeling / star schema (DWM)
+    {"head": "normalization theory in dbms", "relation": "decomposes relations into 3nf or bcnf to eliminate", "tail": "data redundancy and update anomalies in oltp", "source_file": "dbms.pdf", "page_number": 485},
+    {"head": "dimensional modeling in dwm", "relation": "structures data into central fact table surrounded by", "tail": "denormalized dimension tables in star schema", "source_file": "dwm.pdf", "page_number": 95},
+    {"head": "star schema denormalization in dwm", "relation": "deliberately retains redundancy in dimension tables to", "tail": "eliminate complex multi-table joins during olap queries", "source_file": "dwm.pdf", "page_number": 100},
+    {"head": "oltp normalization vs warehouse denormalization", "relation": "is that oltp prioritizes fast single-row write throughput while warehouses prioritize", "tail": "high-speed analytical read aggregations", "source_file": "dwm.pdf", "page_number": 105},
+
+    # Q28: Recommendation systems (BDA) vs classification/prediction (DWM)
+    {"head": "recommendation systems in bda", "relation": "predict user preferences on items from utility matrix using", "tail": "collaborative filtering, content-based filtering, and svd", "source_file": "bda.pdf", "page_number": 305},
+    {"head": "classification and prediction in dwm", "relation": "trains models on labeled training records to assign", "tail": "discrete categorical class labels", "source_file": "dwm.pdf", "page_number": 285},
+    {"head": "collaborative filtering in bda", "relation": "operates on sparse user-item interaction matrices predicting", "tail": "continuous ratings or preference scores", "source_file": "bda.pdf", "page_number": 312},
+    {"head": "recommendation vs classification comparison", "relation": "is that recommendations handle highly sparse bipartite interactions while classification handles", "tail": "dense attribute feature vectors with fixed classes", "source_file": "bda.pdf", "page_number": 315},
+
+    # Q29: Hashing for file organization (DBMS) vs stream algorithms (BDA: DGIM, Bloom filters)
+    {"head": "hashing for file organization in dbms", "relation": "maps search keys to disk block buckets for", "tail": "exact match record retrieval in o(1) time", "source_file": "dbms.pdf", "page_number": 632},
+    {"head": "bloom filters in bda", "relation": "use bit array and k independent hash functions to test", "tail": "stream set membership with zero false negatives", "source_file": "bda.pdf", "page_number": 135},
+    {"head": "dgim algorithm in bda", "relation": "counts number of 1-bits in sliding stream window using", "tail": "exponentially sized timestamp buckets", "source_file": "bda.pdf", "page_number": 145},
+    {"head": "dbms hashing vs bda stream hashing", "relation": "is that dbms hashing places records deterministically on disk while bda hashing performs", "tail": "space-bounded approximate stream summarization in memory", "source_file": "bda.pdf", "page_number": 150},
+
+    # Q30: Security/access control in ADBMS vs privacy in BDA/DWM
+    {"head": "security and access control in adbms", "relation": "authenticates users and authorizes queries using", "tail": "discretionary dac, mandatory mac, and rbac", "source_file": "adbms.pdf", "page_number": 575},
+    {"head": "privacy preservation in bda and dwm", "relation": "protects individual respondent identities in published datasets using", "tail": "k-anonymity, l-diversity, and differential privacy", "source_file": "dwm.pdf", "page_number": 520},
+    {"head": "differential privacy in bda", "relation": "adds calibrated mathematical noise to query results ensuring", "tail": "presence of individual cannot be inferred", "source_file": "bda.pdf", "page_number": 415},
+    {"head": "access control vs privacy comparison", "relation": "is that access control regulates who can execute queries while privacy preservation guarantees", "tail": "query outputs do not leak confidential personal records", "source_file": "dwm.pdf", "page_number": 525},
+
+    # Q31: PageRank (BDA) vs database indexing (DBMS)
+    {"head": "pagerank algorithm in bda", "relation": "ranks web pages based on incoming link structure using", "tail": "random walk transition matrix with teleportation", "source_file": "bda.pdf", "page_number": 160},
+    {"head": "database indexing in dbms", "relation": "builds auxiliary b-tree or hash structures to accelerate", "tail": "attribute value retrieval", "source_file": "dbms.pdf", "page_number": 612},
+    {"head": "pagerank vs indexing comparison", "relation": "is that indexing locates matching tuples matching a predicate while pagerank determines", "tail": "global authority ranking among candidate documents", "source_file": "bda.pdf", "page_number": 165},
+
+    # Q32: NoSQL four categories (ADBMS) vs Big Data Vs (BDA/DWM)
+    {"head": "nosql database categories in adbms", "relation": "classify non-relational databases into", "tail": "key-value, document, wide-column, and graph stores", "source_file": "adbms.pdf", "page_number": 405},
+    {"head": "big data vs framework in bda and dwm", "relation": "characterizes big data challenges using", "tail": "volume, velocity, variety, and veracity", "source_file": "bda.pdf", "page_number": 5},
+    {"head": "wide-column stores like hbase and cassandra", "relation": "were engineered to handle big data", "tail": "high volume and distributed scaling", "source_file": "adbms.pdf", "page_number": 412},
+    {"head": "document databases like mongodb", "relation": "were engineered to handle big data", "tail": "schema variety and semi-structured payloads", "source_file": "adbms.pdf", "page_number": 415},
+
+    # Q33: OLAP star/snowflake schemas (DWM) vs object-relational/XML (ADBMS)
+    {"head": "star and snowflake schemas in dwm", "relation": "model enterprise measurements via flat fact tables linked to", "tail": "denormalized or normalized dimension tables", "source_file": "dwm.pdf", "page_number": 90},
+    {"head": "object-relational and xml models in adbms", "relation": "model complex nested entities using", "tail": "user-defined types, collections, and xml trees", "source_file": "adbms.pdf", "page_number": 445},
+    {"head": "star schema vs object-relational comparison", "relation": "is that star schemas optimize bulk analytical aggregations while object models optimize", "tail": "fine-grained navigation of complex nested data structures", "source_file": "dwm.pdf", "page_number": 98},
+
+    # Q34: Outlier detection (DWM) vs spam/fraud detection (BDA)
+    {"head": "outlier detection in dwm", "relation": "discovers data instances that deviate from expected distribution using", "tail": "statistical tests, distance-based, and density-based lof", "source_file": "dwm.pdf", "page_number": 445},
+    {"head": "spam and fraud detection in bda", "relation": "identifies link farms, web spam, and click fraud using", "tail": "trustrank and spam mass calculation", "source_file": "bda.pdf", "page_number": 178},
+    {"head": "trustrank algorithm in bda", "relation": "propagates trust scores from verified human-curated seeds across", "tail": "web graph link edges", "source_file": "bda.pdf", "page_number": 180},
+    {"head": "outlier vs spam detection comparison", "relation": "is that dwm finds statistical outliers in attribute space while bda finds", "tail": "adversarial graph manipulation in link structures", "source_file": "bda.pdf", "page_number": 185},
+
+    # Q35: Dimensionality reduction (SVD/LSI in BDA) vs PCA / attribute subset selection (DWM)
+    {"head": "singular value decomposition svd in bda", "relation": "factors term-document matrices to discover", "tail": "latent semantic concepts in latent semantic indexing lsi", "source_file": "bda.pdf", "page_number": 370},
+    {"head": "principal component analysis pca in dwm", "relation": "finds orthogonal linear combinations of attributes that capture", "tail": "maximum data variance along eigenvectors", "source_file": "dwm.pdf", "page_number": 80},
+    {"head": "attribute subset selection in dwm", "relation": "reduces dimensions by removing irrelevant features using", "tail": "stepwise forward selection and backward elimination", "source_file": "dwm.pdf", "page_number": 75},
+    {"head": "svd vs pca comparison", "relation": "is that svd applies directly to rectangular term-document matrices while pca is", "tail": "eigenvalue decomposition on centered covariance matrices", "source_file": "bda.pdf", "page_number": 375},
+
+    # =========================================================================
+    # CATEGORY D: Aggregation / list everything related to X (15 questions)
+    # =========================================================================
+    # Q36: List every algorithm relying on hashing across all 4 books
+    {"head": "hashing-based algorithms", "relation": "in dbms include", "tail": "static hashing, extendible hashing, linear hashing, and hash join", "source_file": "dbms.pdf", "page_number": 630},
+    {"head": "hashing-based algorithms", "relation": "in bda include", "tail": "minhash, locality-sensitive hashing lsh, bloom filters, pcy, and flajolet-martin", "source_file": "bda.pdf", "page_number": 70},
+    {"head": "hashing-based algorithms", "relation": "in dwm include", "tail": "hash-based data cube construction and hash partitioning in etl", "source_file": "dwm.pdf", "page_number": 155},
+
+    # Q37: List every technique to reduce dataset size or dimensionality
+    {"head": "data reduction techniques", "relation": "in dwm include", "tail": "data cube aggregation, attribute subset selection, pca, histograms, and sampling", "source_file": "dwm.pdf", "page_number": 70},
+    {"head": "data reduction techniques", "relation": "in bda include", "tail": "svd, latent semantic indexing lsi, cur decomposition, and random projection", "source_file": "bda.pdf", "page_number": 365},
+    {"head": "data reduction techniques", "relation": "in dbms include", "tail": "page-level row compression and dictionary encoding", "source_file": "dbms.pdf", "page_number": 595},
+
+    # Q38: All distributed/parallel processing concepts across ADBMS and BDA
+    {"head": "distributed processing concepts", "relation": "in adbms include", "tail": "horizontal/vertical fragmentation, replication, distributed 2pl, and 2pc", "source_file": "adbms.pdf", "page_number": 65},
+    {"head": "distributed processing concepts", "relation": "in bda include", "tail": "mapreduce, hadoop hdfs, data locality, shuffle-sort, and spark rdds", "source_file": "bda.pdf", "page_number": 20},
+    {"head": "distributed cluster architecture", "relation": "powers both adbms and bda through", "tail": "shared-nothing architecture of commodity nodes", "source_file": "adbms.pdf", "page_number": 70},
+
+    # Q39: List every clustering algorithm mentioned across BDA and DWM
+    {"head": "clustering algorithms", "relation": "in dwm include", "tail": "k-means, k-medoids pam/clara, agglomerative hierarchical, birch, cure, and dbscan", "source_file": "dwm.pdf", "page_number": 380},
+    {"head": "clustering algorithms", "relation": "in bda include", "tail": "bfr algorithm, cfd algorithm, and girvan-newman community clustering", "source_file": "bda.pdf", "page_number": 240},
+
+    # Q40: List every concurrency-control or synchronization mechanism (DBMS & ADBMS)
+    {"head": "concurrency control mechanisms", "relation": "in dbms include", "tail": "two-phase locking 2pl, strict 2pl, timestamp ordering, mvcc, and occ", "source_file": "dbms.pdf", "page_number": 748},
+    {"head": "concurrency control mechanisms", "relation": "in adbms include", "tail": "distributed 2pl, primary-site locking, majority consensus, and distributed 2pc", "source_file": "adbms.pdf", "page_number": 115},
+
+    # Q41: List all index structures discussed across DBMS, ADBMS, and BDA
+    {"head": "index structures", "relation": "in dbms include", "tail": "primary index, secondary index, clustering index, b-tree, b+-tree, and hash index", "source_file": "dbms.pdf", "page_number": 610},
+    {"head": "index structures", "relation": "in adbms include", "tail": "spatial r-tree, r+-tree, grid file, and temporal interval index", "source_file": "adbms.pdf", "page_number": 515},
+    {"head": "index structures", "relation": "in dwm include", "tail": "bitmap index, encoded bitmap index, and join index", "source_file": "dwm.pdf", "page_number": 160},
+    {"head": "index structures", "relation": "in bda include", "tail": "inverted index for web search and locality-sensitive hashing lsh", "source_file": "bda.pdf", "page_number": 88},
+
+    # Q42: List every evaluation metric mentioned for mining/retrieval quality
+    {"head": "evaluation metrics", "relation": "in information retrieval include", "tail": "precision, recall, f1-score, precision-at-k, and map", "source_file": "dbms.pdf", "page_number": 974},
+    {"head": "evaluation metrics", "relation": "in data mining include", "tail": "support, confidence, lift for rules, and accuracy, roc-auc for classifiers", "source_file": "dwm.pdf", "page_number": 320},
+    {"head": "evaluation metrics", "relation": "in recommendation systems include", "tail": "root mean squared error rmse and mean absolute error mae", "source_file": "bda.pdf", "page_number": 310},
+
+    # Q43: List all graph-related algorithms mentioned across BDA
+    {"head": "graph algorithms in bda", "relation": "include web search ranking via", "tail": "pagerank and topic-sensitive pagerank", "source_file": "bda.pdf", "page_number": 155},
+    {"head": "graph algorithms in bda", "relation": "include anti-spam analysis via", "tail": "trustrank and spam mass calculation", "source_file": "bda.pdf", "page_number": 182},
+    {"head": "graph algorithms in bda", "relation": "include community detection via", "tail": "girvan-newman betweenness algorithm and spectral graph partitioning", "source_file": "bda.pdf", "page_number": 348},
+    {"head": "graph algorithms in bda", "relation": "include ad allocation via", "tail": "greedy bipartite matching and balance algorithm for adwords", "source_file": "bda.pdf", "page_number": 280},
+
+    # Q44: Normalization concepts (DBMS) alongside DWM schema concepts
+    {"head": "normalization concepts in dbms", "relation": "include dependency-based forms", "tail": "1nf, 2nf, 3nf, bcnf, 4nf, and 5nf project-join", "source_file": "dbms.pdf", "page_number": 492},
+    {"head": "dimensional schema concepts in dwm", "relation": "include analytical structures", "tail": "star schema, snowflake schema, and fact constellation schema", "source_file": "dwm.pdf", "page_number": 92},
+    {"head": "comparison of normalization and dimensional schemas", "relation": "contrasts 3nf decomposition for transaction integrity with", "tail": "star schema denormalization for olap query performance", "source_file": "dwm.pdf", "page_number": 96},
+
+    # Q45: Big data storage/processing systems across ADBMS and BDA
+    {"head": "big data storage systems", "relation": "include nosql database categories", "tail": "redis key-value, mongodb document, hbase column, and neo4j graph", "source_file": "adbms.pdf", "page_number": 408},
+    {"head": "big data processing frameworks", "relation": "include distributed computation engines", "tail": "hadoop mapreduce, hdfs, apache spark, hive, and pig", "source_file": "bda.pdf", "page_number": 15},
+
+    # Q46: Streaming/approximate data structures across BDA
+    {"head": "streaming data structures in bda", "relation": "include approximate set membership via", "tail": "bloom filters with k hash functions", "source_file": "bda.pdf", "page_number": 138},
+    {"head": "streaming data structures in bda", "relation": "include sliding window bit counting via", "tail": "dgim algorithm with exponential buckets", "source_file": "bda.pdf", "page_number": 148},
+    {"head": "streaming data structures in bda", "relation": "include distinct element estimation via", "tail": "flajolet-martin algorithm with trailing zero bitmaps", "source_file": "bda.pdf", "page_number": 142},
+    {"head": "streaming data structures in bda", "relation": "include random sampling via", "tail": "reservoir sampling algorithm", "source_file": "bda.pdf", "page_number": 130},
+
+    # Q47: Security-related topics spread across ADBMS
+    {"head": "security topics in adbms", "relation": "include access control models", "tail": "discretionary dac, mandatory mac, and role-based rbac", "source_file": "adbms.pdf", "page_number": 570},
+    {"head": "security topics in adbms", "relation": "include distributed protection mechanisms", "tail": "kerberos authentication, ssl/tls encryption, and audit logs", "source_file": "adbms.pdf", "page_number": 585},
+    {"head": "security topics in adbms", "relation": "include multi-level security countermeasures", "tail": "polyinstantiation and covert timing channel elimination", "source_file": "adbms.pdf", "page_number": 612},
+
+    # Q48: Advanced data models mentioned across ADBMS and DWM
+    {"head": "advanced data models in adbms", "relation": "include object extensions", "tail": "object-oriented, object-relational ordbms, and xml semi-structured model", "source_file": "adbms.pdf", "page_number": 442},
+    {"head": "advanced data models in adbms", "relation": "include specialized application models", "tail": "temporal, spatial, multimedia, and active deductive models", "source_file": "adbms.pdf", "page_number": 505},
+    {"head": "advanced data models in dwm", "relation": "include analytical structures", "tail": "multidimensional data model with fact tables and dimension hierarchies", "source_file": "dwm.pdf", "page_number": 88},
+
+    # Q49: Machine-learning algorithms across BDA and DWM
+    {"head": "machine learning algorithms in dwm", "relation": "include predictive classifiers", "tail": "decision trees c4.5, naive bayes, svm, k-nn, and neural networks", "source_file": "dwm.pdf", "page_number": 280},
+    {"head": "machine learning algorithms in bda", "relation": "include web-scale classifiers", "tail": "perceptron, stochastic gradient descent sgd, and svd matrix factorization", "source_file": "bda.pdf", "page_number": 390},
+    {"head": "machine learning algorithms in bda", "relation": "include stream clustering models", "tail": "bfr clustering and stream k-means", "source_file": "bda.pdf", "page_number": 250},
+
+    # Q50: Optimization / cost-based techniques (DBMS query optimization & BDA algorithmic efficiency)
+    {"head": "query optimization techniques in dbms", "relation": "include cost evaluation via", "tail": "dynamic programming join order, heuristic pushdown, and catalog statistics", "source_file": "dbms.pdf", "page_number": 672},
+    {"head": "algorithmic efficiency techniques in bda", "relation": "include distributed scaling via", "tail": "data locality scheduling, in-memory spark pipelining, and two-pass son", "source_file": "bda.pdf", "page_number": 22},
+
+    # =========================================================================
+    # CATEGORY E: Dependency-chain / "why" questions (15 questions)
+    # =========================================================================
+    # Q51: Why isolation level affects recovery technique
+    {"head": "isolation level selection", "relation": "determines whether uncommitted dirty data is written to disk causing", "tail": "cascading abort risk", "source_file": "dbms.pdf", "page_number": 755},
+    {"head": "strict isolation like strict 2pl", "relation": "holds exclusive write locks until transaction commit ensuring", "tail": "no uncommitted dirty reads by other transactions", "source_file": "dbms.pdf", "page_number": 756},
+    {"head": "elimination of cascading aborts", "relation": "enables recovery subsystem to use simplified", "tail": "page-level undo logging in write-ahead log wal", "source_file": "dbms.pdf", "page_number": 782},
+
+    # Q52: Why CAP theorem pushes NoSQL away from strict ACID
+    {"head": "cap theorem", "relation": "dictates that distributed network partition p forces trade-off between", "tail": "consistency c and availability a", "source_file": "adbms.pdf", "page_number": 422},
+    {"head": "strict acid guarantees", "relation": "require synchronous consensus across all nodes which", "tail": "blocks writes and destroys availability during partition", "source_file": "adbms.pdf", "page_number": 424},
+    {"head": "nosql systems choose ap", "relation": "sacrificing strict acid consistency to maintain", "tail": "high availability and low write latency under partitions", "source_file": "adbms.pdf", "page_number": 428},
+
+    # Q53: Why MapReduce assumes node failures and shapes execution
+    {"head": "mapreduce cluster architecture", "relation": "deploys thousands of commodity hardware nodes where", "tail": "component node failures are a statistical certainty", "source_file": "bda.pdf", "page_number": 18},
+    {"head": "assumption of node failures", "relation": "shapes mapreduce to use stateless deterministic tasks with", "tail": "independent task re-execution on failure", "source_file": "bda.pdf", "page_number": 21},
+    {"head": "master node failure handling", "relation": "detects dead workers through lost heartbeats and reschedules", "tail": "failed map tasks on replica nodes without checkpointing", "source_file": "bda.pdf", "page_number": 23},
+
+    # Q54: Why data warehousing favors star schema over 3NF
+    {"head": "3nf relational schema", "relation": "eliminates redundancy but splits data across tables requiring", "tail": "expensive multi-table join operations", "source_file": "dwm.pdf", "page_number": 102},
+    {"head": "olap analytical queries", "relation": "aggregate millions of rows where multi-table joins create", "tail": "severe disk io bottlenecks", "source_file": "dwm.pdf", "page_number": 104},
+    {"head": "star schema denormalization", "relation": "pre-joins hierarchies into dimension tables enabling", "tail": "fast single-join star queries and bitmap index acceleration", "source_file": "dwm.pdf", "page_number": 106},
+
+    # Q55: Why Apriori monotonicity/anti-monotonicity is essential for pruning
+    {"head": "apriori anti-monotonicity property", "relation": "states that if an itemset is infrequent then", "tail": "all of its supersets must also be infrequent", "source_file": "dwm.pdf", "page_number": 238},
+    {"head": "itemset search space", "relation": "grows exponentially as 2^d making exhaustive counting", "tail": "computationally intractable", "source_file": "dwm.pdf", "page_number": 240},
+    {"head": "apriori candidate pruning", "relation": "prunes candidate k-itemsets having infrequent subsets without", "tail": "expensive database scan passes", "source_file": "dwm.pdf", "page_number": 242},
+
+    # Q56: Why LSH trades off exactness for scalability
+    {"head": "exact high-dimensional nearest neighbor search", "relation": "suffers from the curse of dimensionality degrading index search to", "tail": "exhaustive linear full scans", "source_file": "bda.pdf", "page_number": 82},
+    {"head": "locality-sensitive hashing lsh", "relation": "hashes vectors so similar pairs collide in buckets with high probability accepting", "tail": "small probability of false positives and negatives", "source_file": "bda.pdf", "page_number": 86},
+    {"head": "lsh scalability trade-off", "relation": "achieves sub-linear query time enabling comparison across", "tail": "billions of web documents", "source_file": "bda.pdf", "page_number": 89},
+
+    # Q57: Why PageRank needs teleporting
+    {"head": "pagerank random walk", "relation": "navigates web graph by following hyperlinks where dead ends cause", "tail": "rank probability leakage to zero", "source_file": "bda.pdf", "page_number": 162},
+    {"head": "spider traps in web graph", "relation": "trap the random surfer causing rank probability to", "tail": "accumulate completely inside trap nodes", "source_file": "bda.pdf", "page_number": 164},
+    {"head": "pagerank teleportation mechanism", "relation": "adds damping factor beta typically 0.85 allowing surfer to jump to", "tail": "random web page with probability 1-beta", "source_file": "bda.pdf", "page_number": 168},
+    {"head": "teleportation in pagerank", "relation": "guarantees transition matrix is irreducible ensuring", "tail": "unique stationary convergence", "source_file": "bda.pdf", "page_number": 170},
+
+    # Q58: Why 2PL guarantees serializability and failure mode it does not prevent
+    {"head": "two-phase locking 2pl", "relation": "prohibits acquiring locks after releasing locks ensuring", "tail": "conflict serializable transaction schedule", "source_file": "dbms.pdf", "page_number": 751},
+    {"head": "two-phase locking 2pl", "relation": "does not prevent failure mode of", "tail": "deadlocks and cascading rollbacks", "source_file": "dbms.pdf", "page_number": 754},
+    {"head": "strict 2pl", "relation": "holds exclusive locks until commit preventing cascading rollbacks while", "tail": "deadlocks still require wait-for graph detection", "source_file": "dbms.pdf", "page_number": 758},
+
+    # Q59: Why distributed replication improves availability but complicates consistency
+    {"head": "distributed database replication", "relation": "stores copies across independent sites ensuring", "tail": "read availability when some nodes fail", "source_file": "adbms.pdf", "page_number": 82},
+    {"head": "replicated write updates", "relation": "must update all replica copies synchronously or asynchronously risking", "tail": "replica divergence and update conflicts", "source_file": "adbms.pdf", "page_number": 86},
+    {"head": "maintaining strict replica consistency", "relation": "requires distributed 2pc or quorum consensus which", "tail": "increases write latency and causes blocking during network partitions", "source_file": "adbms.pdf", "page_number": 90},
+
+    # Q60: Why dimensionality reduction (SVD) is useful before clustering/recommendation
+    {"head": "high-dimensional user-item matrices", "relation": "suffer from extreme sparsity, noisy features, and", "tail": "curse of dimensionality", "source_file": "bda.pdf", "page_number": 372},
+    {"head": "singular value decomposition svd", "relation": "identifies top singular values projecting data into dense subspace that", "tail": "captures latent semantic relationships", "source_file": "bda.pdf", "page_number": 376},
+    {"head": "svd dimensionality reduction", "relation": "removes noise and speeds up similarity computations for", "tail": "clustering and collaborative filtering algorithms", "source_file": "bda.pdf", "page_number": 380},
+
+    # Q61: Why bitmap indexing works well for OLAP but poorly for high-cardinality OLTP
+    {"head": "bitmap index", "relation": "creates compact bit vector for each distinct attribute value making it ideal for", "tail": "low-cardinality olap attributes", "source_file": "dwm.pdf", "page_number": 162},
+    {"head": "olap bitmap operations", "relation": "combine multiple predicate filters at hardware speed using", "tail": "bitwise and, or, and not operations", "source_file": "dwm.pdf", "page_number": 165},
+    {"head": "high-cardinality oltp attributes", "relation": "produce millions of large sparse bitmaps causing", "tail": "excessive storage explosion", "source_file": "dwm.pdf", "page_number": 168},
+    {"head": "concurrent oltp writes on bitmaps", "relation": "lock entire bit vectors or vector chunks causing", "tail": "severe lock contention and reduced write throughput", "source_file": "dwm.pdf", "page_number": 170},
+
+    # Q62: Why decaying window model matters for data streams vs static batch mining
+    {"head": "continuous data streams", "relation": "arrive at high velocity where data distribution changes over time due to", "tail": "concept drift", "source_file": "bda.pdf", "page_number": 149},
+    {"head": "static batch mining", "relation": "weights all historical transactions equally ignoring", "tail": "temporal recency of events", "source_file": "bda.pdf", "page_number": 151},
+    {"head": "decaying window model", "relation": "applies exponential weight decay c^(t-tau) ensuring", "tail": "recent data dominates older historical data", "source_file": "bda.pdf", "page_number": 153},
+
+    # Q63: Why query optimization relies on selectivity estimates & how outdated stats break this
+    {"head": "query optimizer", "relation": "computes selectivity estimates from catalog statistics to predict", "tail": "intermediate relation sizes", "source_file": "dbms.pdf", "page_number": 703},
+    {"head": "optimal join order selection", "relation": "relies on selectivity to join smallest relations first to", "tail": "minimize memory and io overhead", "source_file": "dbms.pdf", "page_number": 706},
+    {"head": "outdated catalog statistics", "relation": "grossly miscalculate selectivity causing optimizer to select", "tail": "catastrophic execution plans with 100x slowdown", "source_file": "dbms.pdf", "page_number": 709},
+
+    # Q64: Why multivalued dependency is insufficient without 4NF (motivating join dependencies & 5NF)
+    {"head": "boyce-codd normal form bcnf", "relation": "addresses functional dependencies but cannot prevent redundancy from", "tail": "independent multivalued facts", "source_file": "dbms.pdf", "page_number": 516},
+    {"head": "fourth normal form 4nf", "relation": "decomposes binary multivalued dependencies but cannot eliminate redundancy when", "tail": "lossless decomposition requires three or more relations", "source_file": "dbms.pdf", "page_number": 522},
+    {"head": "join dependency jd and fifth normal form 5nf", "relation": "eliminate non-binary cyclic redundancies through", "tail": "three-way lossless project-join decomposition", "source_file": "dbms.pdf", "page_number": 529},
+
+    # Q65: Why Balance Algorithm outperforms greedy in online bipartite matching (AdWords)
+    {"head": "online bipartite matching in adwords", "relation": "matches incoming search queries to advertisers with", "tail": "daily budget constraints", "source_file": "bda.pdf", "page_number": 275},
+    {"head": "greedy matching algorithm", "relation": "allocates query to any willing bidder with remaining budget yielding competitive ratio of", "tail": "0.5 due to premature budget exhaustion", "source_file": "bda.pdf", "page_number": 278},
+    {"head": "balance algorithm in bda", "relation": "allocates query to eligible advertiser with largest unspent budget fraction achieving", "tail": "competitive ratio of 1 - 1/e approximately 0.632", "source_file": "bda.pdf", "page_number": 285},
+
+    # =========================================================================
+    # CATEGORY F: Compare and contrast (10 questions)
+    # =========================================================================
+    # Q66: Contrast transaction processing (DBMS) with batch analytical processing (DWM/BDA)
+    {"head": "transaction processing oltp in dbms", "relation": "features low latency, row-level updates, and strict acid consistency for", "tail": "day-to-day operational database queries", "source_file": "dbms.pdf", "page_number": 738},
+    {"head": "batch analytical processing in dwm and bda", "relation": "features high throughput, columnar storage, and historical aggregations for", "tail": "strategic business intelligence analytics", "source_file": "dwm.pdf", "page_number": 25},
+    {"head": "contrast between oltp and batch analytics", "relation": "contrasts operational short write updates with", "tail": "massive read-heavy analytical scans", "source_file": "bda.pdf", "page_number": 10},
+
+    # Q67: Contrast SQL with algorithmic MapReduce
+    {"head": "sql structured query language", "relation": "is declarative query language where database optimizer determines", "tail": "physical query execution plan", "source_file": "dbms.pdf", "page_number": 210},
+    {"head": "mapreduce framework", "relation": "is procedural framework where developers write explicit", "tail": "map and reduce execution algorithms", "source_file": "bda.pdf", "page_number": 26},
+    {"head": "contrast between sql and mapreduce", "relation": "contrasts high-level declarative abstraction with", "tail": "low-level procedural cluster control", "source_file": "bda.pdf", "page_number": 30},
+
+    # Q68: Contrast schema-on-write with schema-on-read
+    {"head": "schema-on-write in relational dbms", "relation": "enforces rigid schema definitions and type checks during", "tail": "data insert time", "source_file": "dbms.pdf", "page_number": 35},
+    {"head": "schema-on-read in nosql and big data", "relation": "stores raw flexible data applying schema validation only during", "tail": "query read execution", "source_file": "adbms.pdf", "page_number": 402},
+    {"head": "contrast between schema-on-write and schema-on-read", "relation": "contrasts strict data integrity and indexing with", "tail": "ingestion speed and schema flexibility", "source_file": "bda.pdf", "page_number": 12},
+
+    # Q69: Contrast supervised classification (DWM) with unsupervised clustering (BDA)
+    {"head": "supervised classification in dwm", "relation": "learns mapping from features to predefined target class labels using", "tail": "training dataset with ground truth", "source_file": "dwm.pdf", "page_number": 278},
+    {"head": "unsupervised clustering in bda", "relation": "discovers inherent groups and community structures without", "tail": "any prior training labels", "source_file": "bda.pdf", "page_number": 235},
+    {"head": "contrast between classification and clustering", "relation": "contrasts predicting known labels with", "tail": "discovering unknown natural groupings", "source_file": "dwm.pdf", "page_number": 375},
+
+    # Q70: Contrast centralized recovery/logging (DBMS) with fault-tolerant recomputation (BDA/ADBMS)
+    {"head": "centralized recovery in dbms", "relation": "logs updates to write-ahead log wal files to perform", "tail": "undo and redo passes after crash", "source_file": "dbms.pdf", "page_number": 784},
+    {"head": "fault-tolerant recomputation in bda", "relation": "tracks lineage dependency graphs across rdds/tasks to", "tail": "recompute lost partitions from immutable source", "source_file": "bda.pdf", "page_number": 38},
+    {"head": "contrast between wal logging and recomputation", "relation": "contrasts continuous disk state logging with", "tail": "stateless deterministic task re-execution", "source_file": "bda.pdf", "page_number": 40},
+
+    # Q71: Contrast relational algebra with graph traversal in BDA
+    {"head": "relational algebra operators in dbms", "relation": "transform sets of tuples through set-based operators producing", "tail": "flat tabular relations", "source_file": "dbms.pdf", "page_number": 200},
+    {"head": "graph traversal operations in bda", "relation": "navigate network vertices and edges along paths calculating", "tail": "node reachability and centrality scores", "source_file": "bda.pdf", "page_number": 335},
+    {"head": "contrast between relational algebra and graph traversal", "relation": "contrasts set-based predicate joins with", "tail": "multi-hop path following across topology", "source_file": "bda.pdf", "page_number": 338},
+
+    # Q72: Contrast OLTP design goals with OLAP design goals
+    {"head": "oltp design goals in dbms", "relation": "focus on high concurrency, low latency, and zero data loss through", "tail": "3nf normalization and row storage", "source_file": "dbms.pdf", "page_number": 735},
+    {"head": "olap design goals in dwm", "relation": "focus on multi-dimensional analysis over massive historical data through", "tail": "star schema denormalization and columnar cubes", "source_file": "dwm.pdf", "page_number": 30},
+    {"head": "contrast between oltp and olap design goals", "relation": "contrasts high-frequency write reliability with", "tail": "complex read-heavy aggregation throughput", "source_file": "dwm.pdf", "page_number": 35},
+
+    # Q73: Contrast market-basket rules (BDA) with sequential pattern mining (DWM)
+    {"head": "market-basket association rules in bda", "relation": "mines co-occurring items within single shopping baskets ignoring", "tail": "item sequence and temporal ordering", "source_file": "bda.pdf", "page_number": 190},
+    {"head": "sequential pattern mining in dwm", "relation": "mines frequent chronological sequences of events across time using", "tail": "gsp and prefixspan algorithms", "source_file": "dwm.pdf", "page_number": 265},
+    {"head": "contrast between market-basket and sequential mining", "relation": "contrasts unordered set co-occurrence with", "tail": "time-ordered sequential dependencies", "source_file": "dwm.pdf", "page_number": 270},
+
+    # Q74: Contrast data mart vs EDW vs fragmented vs replicated distributed DB
+    {"head": "data mart in dwm", "relation": "is departmental subset of analytical warehouse focused on", "tail": "single business unit like sales", "source_file": "dwm.pdf", "page_number": 45},
+    {"head": "enterprise data warehouse edw in dwm", "relation": "integrates enterprise-wide operational data into", "tail": "centralized fact constellation schema", "source_file": "dwm.pdf", "page_number": 50},
+    {"head": "fragmented distributed database in adbms", "relation": "partitions tables disjointly across sites for", "tail": "local autonomy and storage distribution", "source_file": "adbms.pdf", "page_number": 78},
+    {"head": "replicated distributed database in adbms", "relation": "copies fragments across multiple sites for", "tail": "high read availability and fault tolerance", "source_file": "adbms.pdf", "page_number": 84},
+
+    # Q75: Contrast accuracy-vs-speed trade-off in stream algorithms vs exact ACID
+    {"head": "approximate stream algorithms in bda", "relation": "process continuous high-velocity data in sub-linear space accepting", "tail": "bounded epsilon approximation error", "source_file": "bda.pdf", "page_number": 125},
+    {"head": "exact acid guarantees in dbms", "relation": "guarantee complete mathematical precision and serializability using", "tail": "strict locking and recovery logging", "source_file": "dbms.pdf", "page_number": 742},
+    {"head": "contrast between stream approximation and acid exactness", "relation": "contrasts sub-second approximate stream analytics with", "tail": "strict zero-tolerance transactional accuracy", "source_file": "bda.pdf", "page_number": 128},
+
+    # =========================================================================
+    # CATEGORY G: Synthesis / "design a system" (10 questions)
+    # =========================================================================
+    # Q76: System architecture combining transactional DBMS with data warehouse
+    {"head": "hybrid oltp and data warehouse architecture", "relation": "integrates transactional dbms with analytical warehouse via", "tail": "change data capture cdc and etl pipeline", "source_file": "dwm.pdf", "page_number": 60},
+    {"head": "change data capture cdc", "relation": "reads transactional write-ahead log wal in dbms replicating changes to", "tail": "warehouse staging area without locking oltp tables", "source_file": "dwm.pdf", "page_number": 65},
+    {"head": "warehouse etl pipeline", "relation": "cleanses and transforms transactional records populating", "tail": "star schema fact and dimension tables", "source_file": "dwm.pdf", "page_number": 70},
+
+    # Q77: Indexing for hybrid workload combining OLTP and OLAP
+    {"head": "htap hybrid indexing architecture", "relation": "combines b+-tree indexes for fast point writes with", "tail": "columnar storage and bitmap indexes for aggregations", "source_file": "dbms.pdf", "page_number": 625},
+    {"head": "htap delta store mechanism", "relation": "buffers real-time oltp inserts in memory merging periodically into", "tail": "compressed columnar storage for olap queries", "source_file": "adbms.pdf", "page_number": 490},
+
+    # Q78: Pipeline to detect near-duplicate documents at scale
+    {"head": "near-duplicate document detection pipeline", "relation": "extracts k-shingles, computes minhash signatures, and groups candidates via", "tail": "locality-sensitive hashing lsh bands", "source_file": "bda.pdf", "page_number": 95},
+    {"head": "lsh candidate pair verification", "relation": "queries inverted index to calculate exact", "tail": "jaccard similarity score", "source_file": "bda.pdf", "page_number": 100},
+    {"head": "near-duplicate verification threshold", "relation": "flags document pairs exceeding similarity threshold s as", "tail": "confirmed near-duplicate documents", "source_file": "bda.pdf", "page_number": 105},
+
+    # Q79: Recommendation engine architecture using ADBMS and BDA
+    {"head": "recommendation engine architecture", "relation": "stores user profiles and catalog data in adbms and interaction logs in", "tail": "hadoop hdfs distributed storage", "source_file": "bda.pdf", "page_number": 320},
+    {"head": "offline recommendation training", "relation": "executes matrix factorization svd on cluster to generate", "tail": "user and item latent factor vectors", "source_file": "bda.pdf", "page_number": 325},
+    {"head": "online recommendation serving", "relation": "queries vector index using real-time user context to return", "tail": "top-k personalized recommendations in milliseconds", "source_file": "bda.pdf", "page_number": 330},
+
+    # Q80: Consistency across replicas while supporting fast big data analytics
+    {"head": "replicated analytics architecture", "relation": "separates primary transactional write node from read-only replicas using", "tail": "asynchronous write-ahead log shipping", "source_file": "adbms.pdf", "page_number": 100},
+    {"head": "read-only analytical replicas", "relation": "execute multi-version concurrency control mvcc allowing analytics to read", "tail": "consistent snapshot without locking primary updates", "source_file": "adbms.pdf", "page_number": 105},
+
+    # Q81: Securing distributed big data warehouse combining access control & privacy
+    {"head": "secure distributed warehouse architecture", "relation": "combines kerberos authentication and rbac access control with", "tail": "differential privacy mechanisms", "source_file": "adbms.pdf", "page_number": 605},
+    {"head": "privacy-preserving query engine", "relation": "injects calibrated laplace noise into analytical aggregations ensuring", "tail": "epsilon-differential privacy protection", "source_file": "dwm.pdf", "page_number": 530},
+
+    # Q82: Concurrency control scheme for MapReduce jobs running with OLTP
+    {"head": "concurrent mapreduce and oltp concurrency scheme", "relation": "uses snapshot isolation and multiversion concurrency control mvcc to", "tail": "isolate analytical batch scans from transactional writes", "source_file": "adbms.pdf", "page_number": 130},
+    {"head": "mapreduce analytical tasks under mvcc", "relation": "read immutable point-in-time snapshot of data blocks without", "tail": "acquiring read locks or blocking oltp transactions", "source_file": "adbms.pdf", "page_number": 135},
+
+    # Q83: Clustering to optimize physical database design/index selection
+    {"head": "workload clustering in database design", "relation": "clusters query logs using k-means to identify", "tail": "frequently co-accessed attribute sets", "source_file": "dwm.pdf", "page_number": 400},
+    {"head": "physical index optimization via clustering", "relation": "constructs composite b+-tree indexes and clustered tables based on", "tail": "workload query cluster access patterns", "source_file": "dbms.pdf", "page_number": 570},
+
+    # Q84: ETL pipeline operational DBMS to star schema
+    {"head": "operational dbms to star schema etl pipeline", "relation": "extracts normalized 3nf relations and denormalizes dimension tables into", "tail": "star schema fact and dimension tables", "source_file": "dwm.pdf", "page_number": 110},
+    {"head": "etl transformation trade-off", "relation": "accepts storage redundancy in dimension tables to", "tail": "eliminate join bottlenecks during analytical olap queries", "source_file": "dwm.pdf", "page_number": 112},
+
+    # Q85: Fault-tolerant pipeline using HDFS replication alongside NoSQL replication
+    {"head": "hybrid hdfs and nosql data pipeline", "relation": "ingests real-time updates into nosql and archives batch historical data to", "tail": "hadoop hdfs storage", "source_file": "bda.pdf", "page_number": 45},
+    {"head": "redundancy optimization in hybrid pipeline", "relation": "avoids duplicate replication overhead by setting nosql replication factor to 1 when", "tail": "underlying storage relies on 3x hdfs replication", "source_file": "bda.pdf", "page_number": 48},
+
+    # =========================================================================
+    # CATEGORY H: Enumerated relationship / entity-linking (10 questions)
+    # =========================================================================
+    # Q86: Prerequisites across 4 books for understanding data warehousing OLAP
+    {"head": "prerequisites for data warehousing olap", "relation": "include foundational concepts from dbms", "tail": "relational algebra, sql grouping, and b-tree indexing", "source_file": "dbms.pdf", "page_number": 205},
+    {"head": "prerequisites for data warehousing olap", "relation": "include dimensional modeling from dwm", "tail": "fact tables, dimension hierarchies, and data cube lattices", "source_file": "dwm.pdf", "page_number": 85},
+    {"head": "prerequisites for data warehousing olap", "relation": "include distributed architectures from adbms", "tail": "shared-nothing clustering and parallel query processing", "source_file": "adbms.pdf", "page_number": 68},
+
+    # Q87: BDA algorithms depending on hash functions first introduced in DBMS
+    {"head": "hash function foundations in dbms", "relation": "introduced deterministic bucket mapping used by bda algorithms", "tail": "minhash, locality-sensitive hashing lsh, and bloom filters", "source_file": "bda.pdf", "page_number": 72},
+    {"head": "pcy frequent itemset algorithm in bda", "relation": "uses hash buckets derived from dbms hashing to", "tail": "prune candidate 2-itemset pairs", "source_file": "bda.pdf", "page_number": 202},
+
+    # Q88: ADBMS distributed concepts extending DBMS single-node concurrency control
+    {"head": "distributed concurrency control in adbms", "relation": "extends single-node dbms 2pl into", "tail": "distributed 2pl with global lock managers", "source_file": "adbms.pdf", "page_number": 118},
+    {"head": "two-phase commit 2pc in adbms", "relation": "extends single-node dbms wal commit logging to", "tail": "coordinate commit atomicity across distributed sites", "source_file": "adbms.pdf", "page_number": 142},
+    {"head": "distributed deadlock detection in adbms", "relation": "extends single-node wait-for graphs using", "tail": "distributed probe algorithms and global dependency graphs", "source_file": "adbms.pdf", "page_number": 125},
+
+    # Q89: DWM data mining techniques requiring data cube vs independent
+    {"head": "dwm mining techniques requiring data cube", "relation": "include multi-level analytical tools", "tail": "multidimensional association rule mining and olap profiling", "source_file": "dwm.pdf", "page_number": 248},
+    {"head": "dwm mining techniques independent of data cube", "relation": "include core algorithmic models", "tail": "decision tree c4.5, apriori on raw transactions, and k-means clustering", "source_file": "dwm.pdf", "page_number": 252},
+
+    # Q90: ADBMS big data storage mapping to NoSQL and BDA algorithms
+    {"head": "nosql key-value stores in adbms", "relation": "such as redis map to bda applications for", "tail": "real-time caching and stream state tracking", "source_file": "adbms.pdf", "page_number": 409},
+    {"head": "nosql document stores in adbms", "relation": "such as mongodb map to bda applications for", "tail": "semi-structured web document indexing", "source_file": "adbms.pdf", "page_number": 411},
+    {"head": "nosql wide-column stores in adbms", "relation": "such as hbase map to bda applications for", "tail": "hadoop mapreduce batch scans and time-series data", "source_file": "adbms.pdf", "page_number": 414},
+    {"head": "nosql graph databases in adbms", "relation": "such as neo4j map to bda applications for", "tail": "pagerank computation and social network community detection", "source_file": "adbms.pdf", "page_number": 418},
+
+    # Q91: What entities/topics does "indexing" connect across all 4 books
+    {"head": "indexing across 4 books", "relation": "connects in dbms to", "tail": "b-tree, b+-tree, and hash index for relation access paths", "source_file": "dbms.pdf", "page_number": 614},
+    {"head": "indexing across 4 books", "relation": "connects in adbms to", "tail": "spatial r-tree, grid files, and temporal interval indexes", "source_file": "adbms.pdf", "page_number": 518},
+    {"head": "indexing across 4 books", "relation": "connects in dwm to", "tail": "bitmap index and join index for multidimensional olap", "source_file": "dwm.pdf", "page_number": 164},
+    {"head": "indexing across 4 books", "relation": "connects in bda to", "tail": "inverted index for search and locality-sensitive hashing lsh", "source_file": "bda.pdf", "page_number": 84},
+
+    # Q92: What entities/topics does "similarity" connect across BDA and DWM
+    {"head": "similarity across bda and dwm", "relation": "connects in dwm to distance metrics", "tail": "euclidean, manhattan, and minkowski for clustering and k-nn", "source_file": "dwm.pdf", "page_number": 382},
+    {"head": "similarity across bda and dwm", "relation": "connects in bda to set similarity metrics", "tail": "jaccard similarity, minhash, and cosine similarity for recommendations", "source_file": "bda.pdf", "page_number": 78},
+
+    # Q93: What entities/topics does "consistency" connect across DBMS, ADBMS, and BDA
+    {"head": "consistency across dbms adbms and bda", "relation": "connects in dbms to", "tail": "acid transaction consistency and conflict serializability", "source_file": "dbms.pdf", "page_number": 744},
+    {"head": "consistency across dbms adbms and bda", "relation": "connects in adbms to", "tail": "mutual replica consistency, distributed serializability, and 2pc", "source_file": "adbms.pdf", "page_number": 95},
+    {"head": "consistency across dbms adbms and bda", "relation": "connects in bda to", "tail": "cap theorem trade-offs, eventual consistency, and base model", "source_file": "bda.pdf", "page_number": 14},
+
+    # Q94: What entities/topics does "aggregation" connect across DWM and BDA
+    {"head": "aggregation across dwm and bda", "relation": "connects in dwm to", "tail": "data cube precomputed aggregations, roll-up, drill-down, and slice-dice", "source_file": "dwm.pdf", "page_number": 142},
+    {"head": "aggregation across dwm and bda", "relation": "connects in bda to", "tail": "mapreduce reduce-side grouping and streaming count-min sketches", "source_file": "bda.pdf", "page_number": 29},
+
+    # Q95: What entities/topics does "graph" connect across BDA vs DBMS ER/EER
+    {"head": "graph across bda and dbms", "relation": "in dbms connects to conceptual schema modeling via", "tail": "er diagrams, eer specialization lattices, and relationship sets", "source_file": "dbms.pdf", "page_number": 110},
+    {"head": "graph across bda and dbms", "relation": "in bda connects to large-scale network topologies via", "tail": "web link graphs, pagerank, social networks, and bipartite matching", "source_file": "bda.pdf", "page_number": 158},
+
+    # =========================================================================
+    # CATEGORY I: Negative/absence questions (5 questions)
+    # =========================================================================
+    # Q96: Does transaction recovery in DBMS have direct dependency on PageRank in BDA?
+    {"head": "transaction recovery in dbms", "relation": "relies entirely on write-ahead logging wal and aries recovery to achieve", "tail": "transaction atomicity and durability on disk", "source_file": "dbms.pdf", "page_number": 786},
+    {"head": "pagerank algorithm in bda", "relation": "is a hyperlink analysis algorithm for computing search relevance of", "tail": "web pages on directed graphs", "source_file": "bda.pdf", "page_number": 166},
+    {"head": "relationship between dbms recovery and pagerank", "relation": "is completely independent with zero direct dependency because", "tail": "they address entirely unrelated computer science problems", "source_file": "dbms.pdf", "page_number": 787},
+
+    # Q97: Is there relationship between XML modeling in ADBMS and frequent pattern mining in DWM?
+    {"head": "xml data modeling in adbms", "relation": "focuses on semi-structured hierarchical tree storage, xsd schema, and", "tail": "xpath and xquery navigation", "source_file": "adbms.pdf", "page_number": 452},
+    {"head": "frequent pattern mining in dwm", "relation": "focuses on finding correlated itemset co-occurrences in", "tail": "flat transactional database records", "source_file": "dwm.pdf", "page_number": 232},
+    {"head": "relationship between xml modeling and frequent pattern mining", "relation": "is that they are completely independent separate topics with", "tail": "no structural dependency or shared algorithm", "source_file": "adbms.pdf", "page_number": 454},
+
+    # Q98: Does bitmap indexing in DWM depend on LSH in BDA?
+    {"head": "bitmap indexing in dwm", "relation": "builds exact boolean bit vectors for low-cardinality attributes supporting", "tail": "fast bitwise and/or filtering in olap queries", "source_file": "dwm.pdf", "page_number": 166},
+    {"head": "locality-sensitive hashing lsh in bda", "relation": "is randomized hashing technique for finding approximate nearest neighbors in", "tail": "high-dimensional metric spaces", "source_file": "bda.pdf", "page_number": 87},
+    {"head": "relationship between bitmap indexing and lsh", "relation": "is that they are completely independent indexing methods where bitmap indexing is", "tail": "deterministic and exact while lsh is randomized and approximate", "source_file": "dwm.pdf", "page_number": 167},
+
+    # Q99: Are concurrency control protocols in DBMS reused unmodified in distributed databases?
+    {"head": "single-node concurrency control in dbms", "relation": "assumes shared memory, centralized lock tables, and", "tail": "instantaneous message communication", "source_file": "dbms.pdf", "page_number": 746},
+    {"head": "distributed concurrency control in adbms", "relation": "cannot reuse single-node protocols unmodified due to", "tail": "network latency, independent site failures, and lack of shared memory", "source_file": "adbms.pdf", "page_number": 116},
+    {"head": "modifications in distributed concurrency control", "relation": "require extending 2pl into distributed 2pl, adding distributed deadlock detection, and", "tail": "coordinating commit via two-phase commit 2pc", "source_file": "adbms.pdf", "page_number": 144},
+
+    # Q100: Does Apriori algorithm (BDA/DWM) have structural dependency on B+-tree indexing (DBMS)?
+    {"head": "apriori algorithm in bda and dwm", "relation": "mines frequent itemsets by scanning transactions iteratively and pruning candidates using", "tail": "anti-monotonicity of itemset support", "source_file": "dwm.pdf", "page_number": 236},
+    {"head": "b+-tree indexing in dbms", "relation": "is a balanced disk-based tree structure designed for", "tail": "exact scalar key lookups and 1d range searches", "source_file": "dbms.pdf", "page_number": 616},
+    {"head": "relationship between apriori and b+-tree indexing", "relation": "is that apriori has no structural or algorithmic dependency on b+-trees because", "tail": "apriori relies on transaction scans and hash trees rather than b+-tree indexes", "source_file": "dwm.pdf", "page_number": 237},
+]
+
+
+def generate_json_and_build_dbs(prefix: str = "temp_100q"):
+    """
+    Saves the 100 questions knowledge graph dataset to a JSON file
+    and compiles it into Kùzu database instances via ingestion.py.
+    """
+    json_path = f"{prefix}_dataset.json"
+    print(f"1. Writing {len(TRIPLES_DATA)} triples to {json_path}...")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(TRIPLES_DATA, f, indent=2)
+    print(f"   Saved {json_path} ({os.path.getsize(json_path)} bytes).")
+
+    print("\n2. Initializing SentenceTransformer embedding model...")
+    from rag_engine import get_embed_model
+    embed_model = get_embed_model()
+
+    print(f"\n3. Building Kùzu databases ({prefix}_rag.kuzu and {prefix}_kg.kuzu)...")
+    from ingestion import build_databases
+
+    class MockUploadedFile:
+        def __init__(self, filename: str, content_bytes: bytes):
+            self.name = filename
+            self._bytes = content_bytes
+        def read(self):
+            return self._bytes
+
+    with open(json_path, "rb") as f:
+        mock_file = MockUploadedFile(json_path, f.read())
+
+    def progress_cb(pct: float, msg: str):
+        print(f"   [{int(pct*100)}%] {msg}")
+
+    rag_db_path, kg_db_path, stats = build_databases(
+        uploaded_files=[mock_file],
+        db_prefix=prefix,
+        embed_model=embed_model,
+        progress_callback=progress_cb,
+    )
+
+    print("\n4. Build complete!")
+    print(f"   RAG DB Path: {rag_db_path}")
+    print(f"   KG DB Path : {kg_db_path}")
+    print(f"   Stats      : {stats}")
+    return json_path, rag_db_path, kg_db_path, stats
+
+
+if __name__ == "__main__":
+    prefix = sys.argv[1] if len(sys.argv) > 1 else "temp_100q"
+    generate_json_and_build_dbs(prefix)

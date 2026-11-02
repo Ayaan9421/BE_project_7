@@ -221,7 +221,7 @@ def query_graph_rag(
         # Step 4: Prompt Template as in GraphRAG.ipynb
         generation_prompt = PromptTemplate(
             input_variables=["context", "question"],
-            template="""You are a knowledgeable assistant. Use ONLY the knowledge graph triples below to answer the question.
+            template="""You are a knowledgeable assistant. Use the knowledge graph triples below to structure and generate a comprehensive answer.
 Each triple is in the form: (head) -[relation]-> (tail)  [src: <file>, p.<page>]
 If the triples do not contain enough information, say so clearly.
 

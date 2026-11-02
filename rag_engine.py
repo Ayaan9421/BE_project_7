@@ -158,7 +158,7 @@ def query_semantic_rag(
         context = "\n\n".join([item["text"] for item in top_k])
 
         # Step 4: Prompt Template as in BE_RAG.ipynb
-        template = """Answer the question based on the following context:
+        template = """You are a knowledgeable assistant. Use the retrieved chunks below to structure and generate a comprehensive answer.:
 {context}
 
 Question: {question}
